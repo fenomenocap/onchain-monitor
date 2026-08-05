@@ -135,11 +135,7 @@ def evaluate_alerts(
 
     # ── 3. IL exceeded threshold ──────────────────────────────────────────
     if pnl is not None and pnl.il_pct < -config.il_threshold_pct:
-        transition = (
-            prev is None
-            or prev.il_pct is None
-            or prev.il_pct >= -config.il_threshold_pct
-        )
+        transition = prev is None or prev.il_pct is None or prev.il_pct >= -config.il_threshold_pct
         yield Alert(
             position_uid=position.uid,
             kind="IL_THRESHOLD",

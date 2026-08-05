@@ -123,9 +123,7 @@ class UniswapV3Adapter(BaseAdapter):
 
     # ── Events ────────────────────────────────────────────────────────────
 
-    def fetch_events(
-        self, wallet: str, chain: Chain, since_ts: int = 0
-    ) -> list[Event]:
+    def fetch_events(self, wallet: str, chain: Chain, since_ts: int = 0) -> list[Event]:
         if chain not in V3_CHAINS:
             return []
 
@@ -149,9 +147,7 @@ class UniswapV3Adapter(BaseAdapter):
         all_events.sort(key=lambda e: (e.ts, e.log_index))
         return all_events
 
-    def _fetch_mints(
-        self, wallet: str, chain: Chain, since_ts: int
-    ) -> list[dict]:
+    def _fetch_mints(self, wallet: str, chain: Chain, since_ts: int) -> list[dict]:
         all_mints, skip = [], 0
         while True:
             q = f"""
@@ -183,9 +179,7 @@ class UniswapV3Adapter(BaseAdapter):
             skip += 1000
         return all_mints
 
-    def _fetch_burns(
-        self, wallet: str, chain: Chain, since_ts: int
-    ) -> list[dict]:
+    def _fetch_burns(self, wallet: str, chain: Chain, since_ts: int) -> list[dict]:
         all_burns, skip = [], 0
         while True:
             q = f"""
@@ -223,9 +217,7 @@ class UniswapV3Adapter(BaseAdapter):
     def _burn_to_event(self, b: dict, wallet: str, chain: Chain) -> Event | None:
         return self._raw_to_event(b, wallet, chain, EventKind.WITHDRAW)
 
-    def _raw_to_event(
-        self, raw: dict, wallet: str, chain: Chain, kind: EventKind
-    ) -> Event | None:
+    def _raw_to_event(self, raw: dict, wallet: str, chain: Chain, kind: EventKind) -> Event | None:
         try:
             t0 = raw["token0"]
             t1 = raw["token1"]
@@ -332,9 +324,7 @@ class UniswapV3Adapter(BaseAdapter):
 
             sqrt_lower = tick_to_sqrt_price(tick_lower)
             sqrt_upper = tick_to_sqrt_price(tick_upper)
-            raw0, raw1 = amounts_from_liquidity(
-                sqrt_price_x96, sqrt_lower, sqrt_upper, liquidity
-            )
+            raw0, raw1 = amounts_from_liquidity(sqrt_price_x96, sqrt_lower, sqrt_upper, liquidity)
             current0 = Decimal(raw0) / Decimal(10**token0.decimals)
             current1 = Decimal(raw1) / Decimal(10**token1.decimals)
 
@@ -345,9 +335,7 @@ class UniswapV3Adapter(BaseAdapter):
 
             # Pool-ratio fallback
             if pp0 is None and pp1 is not None and p1 > 0:
-                derived = self.price_from_sqrt(
-                    sqrt_price_x96, token0.decimals, token1.decimals, p1
-                )
+                derived = self.price_from_sqrt(sqrt_price_x96, token0.decimals, token1.decimals, p1)
                 if derived:
                     p0 = derived
 
@@ -375,7 +363,7 @@ class UniswapV3Adapter(BaseAdapter):
                     protocol_id=self.info.protocol_id,
                     position_key=f"{pool}:{tick_lower}:{tick_upper}",
                     protocol_kind=ProtocolKind.CL_AMM,
-                    pair_label=f"{token0.symbol}/{token1.symbol} {fee/10000:.2f}%",
+                    pair_label=f"{token0.symbol}/{token1.symbol} {fee / 10000:.2f}%",
                     tokens=[token0, token1],
                     current_value_usd=lp_value_usd,
                     current_balances=[

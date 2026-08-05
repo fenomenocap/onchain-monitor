@@ -165,18 +165,18 @@ class SlackDelivery:
         total_value = sum(r["current_value_usd"] for r in snaps)
         total_mtd = sum(r["pnl_mtd_usd"] or 0 for r in mtd_rows) if mtd_rows else None
         earned_mtd = float(fees_earned_mtd(mtd_rows)) if mtd_rows else None
-        total_fees_mtd = (
-            sum(r["fees_collected_mtd"] or 0 for r in mtd_rows) if mtd_rows else None
-        )
+        total_fees_mtd = sum(r["fees_collected_mtd"] or 0 for r in mtd_rows) if mtd_rows else None
         today = datetime.now(UTC).strftime("%b %-d")
 
-        blocks: list[dict] = [{
-            "type": "header",
-            "text": {
-                "type": "plain_text",
-                "text": f"💼 Portfolio  {self._fmt_k(total_value)}  ·  {today}",
-            },
-        }]
+        blocks: list[dict] = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": f"💼 Portfolio  {self._fmt_k(total_value)}  ·  {today}",
+                },
+            }
+        ]
 
         # ── Pulse: what changed ───────────────────────────────────────────
         pulse: list[str] = []
@@ -194,10 +194,12 @@ class SlackDelivery:
                 f"{self._fmt_k(total_fees_mtd)} collected"
             )
         pulse.append(f"{len(snaps)} positions")
-        blocks.append({
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": "  ·  ".join(pulse)},
-        })
+        blocks.append(
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "  ·  ".join(pulse)},
+            }
+        )
 
         # ── Drivers | Risk, side by side ──────────────────────────────────
         d = pnl_decomposition(snaps)
@@ -221,13 +223,15 @@ class SlackDelivery:
             f"top pair  {r['top_pair']}  {r['top_pair_pct']:.0f}% of book\n"
             f"largest position  {self._fmt_k(float(r['largest_position_value']))}"
         )
-        blocks.append({
-            "type": "section",
-            "fields": [
-                {"type": "mrkdwn", "text": drivers_field},
-                {"type": "mrkdwn", "text": risk_field},
-            ],
-        })
+        blocks.append(
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": drivers_field},
+                    {"type": "mrkdwn", "text": risk_field},
+                ],
+            }
+        )
 
         # ── Fee trend: MoM at harvest vs held-to-today ────────────────────
         if collect_rows:
@@ -258,11 +262,14 @@ class SlackDelivery:
                 )
                 rows_txt = [hdr]
                 for m in window:
-                    rows_txt.append(_fee_row(
-                        m, [float(cells.get((m, c), 0)) for c in order],
-                        float(val["claim_by_month"].get(m, 0)),
-                        float(val["today_by_month"].get(m, 0)),
-                    ))
+                    rows_txt.append(
+                        _fee_row(
+                            m,
+                            [float(cells.get((m, c), 0)) for c in order],
+                            float(val["claim_by_month"].get(m, 0)),
+                            float(val["today_by_month"].get(m, 0)),
+                        )
+                    )
                 # Current accrual month is still pre-sweep: show live unclaimed
                 # (fees earned since the last harvest) as MTD-so-far, marked *.
                 cur_month = datetime.now(UTC).strftime("%Y-%m")
@@ -275,25 +282,32 @@ class SlackDelivery:
                             unc_by_chain[sn["chain"]] = unc_by_chain.get(sn["chain"], 0.0) + u
                     unc = sum(unc_by_chain.values())
                     if unc > 0:
-                        rows_txt.append(_fee_row(
-                            cur_month + "*", [unc_by_chain.get(c, 0.0) for c in order], unc, unc
-                        ))
+                        rows_txt.append(
+                            _fee_row(
+                                cur_month + "*", [unc_by_chain.get(c, 0.0) for c in order], unc, unc
+                            )
+                        )
                         pending_note = f"\n_* {cur_month} = unclaimed so far (accruing, pre-sweep)_"
                 # YTD + lifetime summary rows.
                 rows_txt.append("─" * len(hdr))
                 year = datetime.now(UTC).strftime("%Y")
                 ytd_m = [m for m in val["months"] if m.startswith(year)]
-                rows_txt.append(_fee_row(
-                    f"YTD {year}",
-                    [sum(float(cells.get((m, c), 0)) for m in ytd_m) for c in order],
-                    sum(float(val["claim_by_month"].get(m, 0)) for m in ytd_m),
-                    sum(float(val["today_by_month"].get(m, 0)) for m in ytd_m),
-                ))
-                rows_txt.append(_fee_row(
-                    "Lifetime",
-                    [sum(float(cells.get((m, c), 0)) for m in val["months"]) for c in order],
-                    float(val["claim_total"]), float(val["today_total"]),
-                ))
+                rows_txt.append(
+                    _fee_row(
+                        f"YTD {year}",
+                        [sum(float(cells.get((m, c), 0)) for m in ytd_m) for c in order],
+                        sum(float(val["claim_by_month"].get(m, 0)) for m in ytd_m),
+                        sum(float(val["today_by_month"].get(m, 0)) for m in ytd_m),
+                    )
+                )
+                rows_txt.append(
+                    _fee_row(
+                        "Lifetime",
+                        [sum(float(cells.get((m, c), 0)) for m in val["months"]) for c in order],
+                        float(val["claim_total"]),
+                        float(val["today_total"]),
+                    )
+                )
                 ct, td = float(val["claim_total"]), float(val["today_total"])
                 # One reconciled fee story: lifetime = closed + open portions,
                 # then the held-to-today haircut.
@@ -319,13 +333,15 @@ class SlackDelivery:
                         f"lifetime *{self._fmt_k(ct)}* claimed "
                         f"(open {self._fmt_k(open_fees)} + closed {self._fmt_k(closed_fees)})"
                     )
-                blocks.append({
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": headline + "\n```" + "\n".join(rows_txt) + "```" + pending_note,
-                    },
-                })
+                blocks.append(
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": headline + "\n```" + "\n".join(rows_txt) + "```" + pending_note,
+                        },
+                    }
+                )
 
         # ── What's earning: in-range positions with realized 30d yield ───
         yields = window_yields(
@@ -352,17 +368,19 @@ class SlackDelivery:
                 rest_val = sum(row["current_value_usd"] for row in rest)
                 lines.append(f"… +{len(rest)} more in range · {self._fmt_k(rest_val)}")
             in_range_val = sum(row["current_value_usd"] for row in earning)
-            blocks.append({
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": (
-                        f"🟢 *Earning — {self._fmt_k(in_range_val)} in range* "
-                        f"_(30d yld = fees earned last {_YIELD_WINDOW_DAYS}d ÷ avg value, annualized)_\n"
-                        "```" + "\n".join(lines) + "```"
-                    ),
-                },
-            })
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            f"🟢 *Earning — {self._fmt_k(in_range_val)} in range* "
+                            f"_(30d yld = fees earned last {_YIELD_WINDOW_DAYS}d ÷ avg value, annualized)_\n"
+                            "```" + "\n".join(lines) + "```"
+                        ),
+                    },
+                }
+            )
 
         # ── What needs action — economic rebalance signals ────────────────
         signals = rebalance_signals(snaps, yields, last_in_range, tick_vol=data.tick_vol)
@@ -377,10 +395,12 @@ class SlackDelivery:
             head = f"🚨 *Needs action ({n_act})*"
             if n_snoozed:
                 head += f"  ·  _{n_snoozed} snoozed_"
-            blocks.append({
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": head + "\n" + "\n".join(attention)},
-            })
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": head + "\n" + "\n".join(attention)},
+                }
+            )
 
         # ── Footnotes ─────────────────────────────────────────────────────
         notes: list[str] = []
@@ -394,10 +414,12 @@ class SlackDelivery:
         if unknown:
             notes.append(f"IL/PnL figures exclude {unknown} position(s) with no event history")
         if notes:
-            blocks.append({
-                "type": "context",
-                "elements": [{"type": "mrkdwn", "text": "\n".join(notes)}],
-            })
+            blocks.append(
+                {
+                    "type": "context",
+                    "elements": [{"type": "mrkdwn", "text": "\n".join(notes)}],
+                }
+            )
 
         return {"blocks": blocks}
 
@@ -442,8 +464,7 @@ class SlackDelivery:
             sug = s.get("suggest")
             if sug:
                 line += (
-                    f"\n     ↳ retarget ±{sug['half_pct']:.0f}% "
-                    f"(now ±{s['current_half_pct']:.0f}%)"
+                    f"\n     ↳ retarget ±{sug['half_pct']:.0f}% (now ±{s['current_half_pct']:.0f}%)"
                 )
             lines.append(line)
         return lines
@@ -483,4 +504,3 @@ class SlackDelivery:
             return "OUT"
         pct = min(tu - tc, tc - tl) / (tu - tl) * 100
         return f"IN{pct:.0f}%"
-

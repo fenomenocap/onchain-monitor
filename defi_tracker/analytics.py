@@ -245,8 +245,13 @@ def fees_by_pair(
         label = pair_label_from_amounts(r["amounts_json"], r["position_key"], symbols_by_key)
         row = agg.setdefault(
             label,
-            {"pair": label, "chain": r["chain"], "lifetime": Decimal("0"),
-             "recent": Decimal("0"), "collects": 0},
+            {
+                "pair": label,
+                "chain": r["chain"],
+                "lifetime": Decimal("0"),
+                "recent": Decimal("0"),
+                "collects": 0,
+            },
         )
         usd = Decimal(str(r["usd_at_ts"]))
         row["lifetime"] += usd
@@ -365,9 +370,7 @@ def window_yields(
     return out
 
 
-def fee_valuation(
-    collect_rows: list[dict], price_today: dict[str, Decimal] | None = None
-) -> dict:
+def fee_valuation(collect_rows: list[dict], price_today: dict[str, Decimal] | None = None) -> dict:
     """Fees valued two ways: at harvest (each collect at its claim-day price —
     the standard "fee generation" measure) and marked to today's token prices
     (what those fee tokens are worth now, if held rather than sold at claim).
@@ -459,7 +462,9 @@ def risk_summary(snap_rows: list[dict]) -> dict:
     by_pair: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     for r in snap_rows:
         by_pair[r["pair_label"]] += Decimal(str(r["current_value_usd"]))
-    top_pair, top_pair_value = max(by_pair.items(), key=lambda kv: kv[1], default=("—", Decimal("0")))
+    top_pair, top_pair_value = max(
+        by_pair.items(), key=lambda kv: kv[1], default=("—", Decimal("0"))
+    )
     largest = max(snap_rows, key=lambda r: r["current_value_usd"], default=None)
     return {
         "total_value": total,
@@ -470,7 +475,9 @@ def risk_summary(snap_rows: list[dict]) -> dict:
         "top_pair_value": top_pair_value,
         "top_pair_pct": top_pair_value / total * 100,
         "largest_position_label": largest["pair_label"] if largest else "—",
-        "largest_position_value": Decimal(str(largest["current_value_usd"])) if largest else Decimal("0"),
+        "largest_position_value": Decimal(str(largest["current_value_usd"]))
+        if largest
+        else Decimal("0"),
     }
 
 
@@ -496,7 +503,9 @@ class RebalanceConfig:
 DEFAULT_REBALANCE_CONFIG = RebalanceConfig()
 
 
-def pool_tick_volatility(history_rows: list[dict], min_points: int = 5) -> dict[tuple[str, str], float]:
+def pool_tick_volatility(
+    history_rows: list[dict], min_points: int = 5
+) -> dict[tuple[str, str], float]:
     """{(chain, pair_label): σ_ticks_per_day} from the daily snapshot
     tick_current series. price = 1.0001^tick, so a day's Δtick IS that day's
     log-return — its stdev is realized volatility in tick units, no price
@@ -521,7 +530,7 @@ def pool_tick_volatility(history_rows: list[dict], min_points: int = 5) -> dict[
 
 
 def suggest_range(
-    tick_current: int, sigma_ticks: float, z: float = 2.5, horizon_days: int = 30
+    tick_current: int, sigma_ticks: float | None, z: float = 2.5, horizon_days: int = 30
 ) -> dict | None:
     """Symmetric range around the current tick sized to z·σ·√horizon in tick
     (log-price) space. Returns {half_ticks, lower, upper, half_pct} — half_pct
@@ -596,9 +605,7 @@ def rebalance_signals(
         yld = y["apy_pct"] if y else None
         dead = yld is None or yld < config.dead_yield_pct
         seen = last_in_range.get(r["position_key"])
-        days_out = (
-            (today - datetime.strptime(seen, "%Y-%m-%d").date()).days if seen else None
-        )
+        days_out = (today - datetime.strptime(seen, "%Y-%m-%d").date()).days if seen else None
 
         if not dead:
             tier = "watch"
@@ -620,20 +627,22 @@ def rebalance_signals(
             config.target_horizon_days,
         )
 
-        signals.append({
-            "uid": f"{r['wallet']}:{r['chain']}:{r['protocol_id']}:{r['position_key']}",
-            "wallet": r["wallet"],
-            "position_key": r["position_key"],
-            "pair": r["pair_label"],
-            "tier": tier,
-            "idle_usd": idle,
-            "depth": depth,
-            "days_out": days_out,
-            "yield_pct": yld,
-            "forgone_usd": idle * benchmark / 100.0,
-            "current_half_pct": current_half_pct,
-            "suggest": suggest,  # {half_ticks, lower, upper, half_pct} or None
-        })
+        signals.append(
+            {
+                "uid": f"{r['wallet']}:{r['chain']}:{r['protocol_id']}:{r['position_key']}",
+                "wallet": r["wallet"],
+                "position_key": r["position_key"],
+                "pair": r["pair_label"],
+                "tier": tier,
+                "idle_usd": idle,
+                "depth": depth,
+                "days_out": days_out,
+                "yield_pct": yld,
+                "forgone_usd": idle * benchmark / 100.0,
+                "current_half_pct": current_half_pct,
+                "suggest": suggest,  # {half_ticks, lower, upper, half_pct} or None
+            }
+        )
 
     order = {"now": 0, "soon": 1, "watch": 2}
     signals.sort(key=lambda s: (order[s["tier"]], -s["idle_usd"]))

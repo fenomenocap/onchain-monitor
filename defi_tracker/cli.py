@@ -95,7 +95,7 @@ def _trunc_mid(s: str, max_len: int) -> str:
     if len(s) <= max_len:
         return s
     half = (max_len - 1) // 2
-    return s[:half] + "…" + s[-(max_len - half - 1):]
+    return s[:half] + "…" + s[-(max_len - half - 1) :]
 
 
 # ── Storage ───────────────────────────────────────────────────────────────
@@ -198,7 +198,9 @@ def cmd_run(args):
         if delivered:
             logging.info("alerts delivered: %d", delivered)
     elif summary["alerts_raised"]:
-        print(f"\nℹ️  SLACK_WEBHOOK_URL not set — {summary['alerts_raised']} alert(s) stored in DB but not delivered.")
+        print(
+            f"\nℹ️  SLACK_WEBHOOK_URL not set — {summary['alerts_raised']} alert(s) stored in DB but not delivered."
+        )
 
     if getattr(args, "report", False):
         args.wallet = getattr(args, "wallet", None)
@@ -265,7 +267,11 @@ def cmd_mom(args):
     _sep(width=95)
     for r in rows:
         w_short = _w(r["wallet"])
-        delta = _usd(r["delta_vs_prev_month"]) if r["delta_vs_prev_month"] is not None else "          —"
+        delta = (
+            _usd(r["delta_vs_prev_month"])
+            if r["delta_vs_prev_month"] is not None
+            else "          —"
+        )
         print(
             f"   {r['month']:<8} {w_short:<14} {r['chain']:<10} "
             f"{r['protocol_id']:<22} {_usd(r['end_value_usd'])} "
@@ -281,9 +287,7 @@ def cmd_alerts(args):
         return
     _sev_emoji = {"high": "🚨", "medium": "⚠️ ", "low": "ℹ️ "}
     _sep(f"Alerts (showing up to {args.limit})")
-    print(
-        f"   {'When':<10} {'Sev':<4} {'Kind':<18} {'Position':<36} {'Message':<42} {'Del'}"
-    )
+    print(f"   {'When':<10} {'Sev':<4} {'Kind':<18} {'Position':<36} {'Message':<42} {'Del'}")
     _sep(width=120)
     undelivered = [a for a in alerts if not a["delivered_at"]]
     delivered = [a for a in alerts if a["delivered_at"]]
@@ -339,7 +343,9 @@ def cmd_rebalance(args):
     now = int(datetime.now(UTC).timestamp())
     icon = {"now": "🔴", "soon": "🟠"}
     _sep("Rebalance queue")
-    print(f"   {'ID':>3}  {'':<2}{'Pair':<22}{'Idle':>9}{'Past':>6}{'Age':>5}  {'Status':<18}Target")
+    print(
+        f"   {'ID':>3}  {'':<2}{'Pair':<22}{'Idle':>9}{'Past':>6}{'Age':>5}  {'Status':<18}Target"
+    )
     _sep(width=104)
     for r in rows:
         ctx = _json.loads(r["context_json"] or "{}")
@@ -353,8 +359,7 @@ def cmd_rebalance(args):
         else:
             status = "open"
         tgt = (
-            f"±{sug['half_pct']:.0f}% (now ±{ctx.get('current_half_pct', 0):.0f}%)"
-            if sug else "—"
+            f"±{sug['half_pct']:.0f}% (now ±{ctx.get('current_half_pct', 0):.0f}%)" if sug else "—"
         )
         depth = f"{ctx.get('depth', 0) * 100:.0f}%"
         print(
@@ -389,6 +394,7 @@ def cmd_report(args):
 
     # Group by chain
     from itertools import groupby
+
     snaps_sorted = sorted(snaps, key=lambda r: (r["chain"], r["pair_label"]))
     col_h = f"   {'Pair':<26} {'Wallet':<14} {'Value':>11} {'Uncl':>11} {'IL':>11} {'PnL':>11} {'Range':>6}  In?"
     for chain, group in groupby(snaps_sorted, key=lambda r: r["chain"]):
@@ -493,7 +499,7 @@ def cmd_fees(args):
     split = fee_netting_split(rows)
     months = val["months"]
     if args.months:
-        months = months[-args.months:]
+        months = months[-args.months :]
 
     from datetime import UTC, datetime
 
@@ -527,9 +533,7 @@ def cmd_fees(args):
     wm, wc, wt = 9, 13, 15  # month / chain / total column widths
 
     def _fee_row(label, chain_vals, total, mtm):
-        body = "".join(
-            f"{('$' + format(v, ',.0f')) if v else '—':>{wc}}" for v in chain_vals
-        )
+        body = "".join(f"{('$' + format(v, ',.0f')) if v else '—':>{wc}}" for v in chain_vals)
         return (
             f"   {label:<{wm}}{body}"
             f"{'$' + format(total, ',.0f'):>{wt}}{'$' + format(mtm, ',.0f'):>{wt}}"
@@ -548,7 +552,9 @@ def cmd_fees(args):
         cvals = [float(cells.get((m, c), 0)) for c in ordered]
         print(
             _fee_row(
-                m, cvals, float(val["claim_by_month"].get(m, 0)),
+                m,
+                cvals,
+                float(val["claim_by_month"].get(m, 0)),
                 float(val["today_by_month"].get(m, 0)),
             )
         )
@@ -573,7 +579,8 @@ def cmd_fees(args):
         _fee_row(
             "Lifetime",
             [sum(float(cells.get((m, c), 0)) for m in val["months"]) for c in ordered],
-            float(val["claim_total"]), float(val["today_total"]),
+            float(val["claim_total"]),
+            float(val["today_total"]),
         )
     )
     if pending_month:
@@ -749,9 +756,7 @@ def cmd_refresh_tokens(args):
     with s.connect() as conn:
         stubs = [
             dict(r)
-            for r in conn.execute(
-                "SELECT chain, address, symbol FROM tokens"
-            ).fetchall()
+            for r in conn.execute("SELECT chain, address, symbol FROM tokens").fetchall()
             if stub_re.match(r["symbol"])
         ]
 
@@ -857,23 +862,23 @@ def main():
 
     p_alerts = sub.add_parser("alerts", help="Show recent alerts")
     p_alerts.add_argument("--limit", type=int, default=50)
-    p_alerts.add_argument(
-        "--undelivered-only", action="store_true", dest="undelivered_only"
-    )
+    p_alerts.add_argument("--undelivered-only", action="store_true", dest="undelivered_only")
     p_alerts.set_defaults(func=cmd_alerts)
 
-    p_reb = sub.add_parser(
-        "rebalance", help="Rebalance action queue — list, mark done, or snooze"
+    p_reb = sub.add_parser("rebalance", help="Rebalance action queue — list, mark done, or snooze")
+    p_reb.add_argument(
+        "--done", type=int, metavar="ID", help="Mark queue item ID rebalanced (drops off)"
     )
-    p_reb.add_argument("--done", type=int, metavar="ID", help="Mark queue item ID rebalanced (drops off)")
     p_reb.add_argument("--snooze", type=int, metavar="ID", help="Defer queue item ID")
-    p_reb.add_argument("--days", type=int, default=7, help="Snooze duration in days (with --snooze)")
-    p_reb.add_argument("--all", action="store_true", dest="show_all", help="Include resolved history")
+    p_reb.add_argument(
+        "--days", type=int, default=7, help="Snooze duration in days (with --snooze)"
+    )
+    p_reb.add_argument(
+        "--all", action="store_true", dest="show_all", help="Include resolved history"
+    )
     p_reb.set_defaults(func=cmd_rebalance)
 
-    p_dash = sub.add_parser(
-        "dashboard", help="Sync + full portfolio view in one command"
-    )
+    p_dash = sub.add_parser("dashboard", help="Sync + full portfolio view in one command")
     p_dash.add_argument("--wallet")
     p_dash.set_defaults(func=cmd_dashboard)
 

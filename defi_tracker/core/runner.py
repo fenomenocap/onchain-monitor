@@ -100,13 +100,18 @@ class TrackerRunner:
                 _log.warning(
                     "Adapter %s@%s ignored its time budget for %s — force-stopping; "
                     "it resumes from its cursor next run",
-                    pid, chain.value, wallet[:10],
+                    pid,
+                    chain.value,
+                    wallet[:10],
                 )
                 break
         if not got_any:
             _log.debug(
                 "No events returned for %s/%s/%s since ts=%d",
-                wallet[:10], chain, pid, since_ts,
+                wallet[:10],
+                chain,
+                pid,
+                since_ts,
             )
         return inserted
 
@@ -135,7 +140,10 @@ class TrackerRunner:
         for prior in self.storage.open_position_identities(wallet, chain, pid):
             if prior["position_key"] not in current_keys:
                 _log.info(
-                    "Position closed: %s/%s/%s %s", wallet[:10], chain.value, pid,
+                    "Position closed: %s/%s/%s %s",
+                    wallet[:10],
+                    chain.value,
+                    pid,
                     prior["pair_label"],
                 )
                 self.storage.write_tombstone_snapshot(
@@ -245,13 +253,14 @@ class TrackerRunner:
             window_days=self._REBALANCE_WINDOW_DAYS,
         )
         tick_vol = pool_tick_volatility(
-            self.storage.snapshots_in_range(
-                start_date=today.fromordinal(today.toordinal() - 90)
-            ),
+            self.storage.snapshots_in_range(start_date=today.fromordinal(today.toordinal() - 90)),
             min_points=self.rebalance_config.vol_min_points,
         )
         return rebalance_signals(
-            snaps, yields, self.storage.last_in_range_dates(), self.rebalance_config,
+            snaps,
+            yields,
+            self.storage.last_in_range_dates(),
+            self.rebalance_config,
             tick_vol=tick_vol,
         )
 
@@ -290,27 +299,30 @@ class TrackerRunner:
             target = (
                 f" Suggest retarget to ±{sug['half_pct']:.0f}% "
                 f"(ticks {sug['lower']}–{sug['upper']}), now ±{sig['current_half_pct']:.0f}%."
-                if sug else ""
+                if sug
+                else ""
             )
-            self.storage.write_alert(Alert(
-                position_uid=uid,
-                kind="REBALANCE",
-                severity=AlertSeverity.HIGH,
-                message=(
-                    f"{sig['pair']}: ${sig['idle_usd']:,.0f} idle, "
-                    f"{sig['depth'] * 100:.0f}% past range edge{days}, not earning. "
-                    f"Rebalance to redeploy (~${sig['forgone_usd']:,.0f}/yr forgone).{target}"
-                ),
-                triggered_at=now,
-                context={
-                    "idle_usd": sig["idle_usd"],
-                    "depth": sig["depth"],
-                    "days_out": sig["days_out"],
-                    "forgone_usd": sig["forgone_usd"],
-                    "suggest": sug,
-                    "transition": False,
-                },
-            ))
+            self.storage.write_alert(
+                Alert(
+                    position_uid=uid,
+                    kind="REBALANCE",
+                    severity=AlertSeverity.HIGH,
+                    message=(
+                        f"{sig['pair']}: ${sig['idle_usd']:,.0f} idle, "
+                        f"{sig['depth'] * 100:.0f}% past range edge{days}, not earning. "
+                        f"Rebalance to redeploy (~${sig['forgone_usd']:,.0f}/yr forgone).{target}"
+                    ),
+                    triggered_at=now,
+                    context={
+                        "idle_usd": sig["idle_usd"],
+                        "depth": sig["depth"],
+                        "days_out": sig["days_out"],
+                        "forgone_usd": sig["forgone_usd"],
+                        "suggest": sug,
+                        "transition": False,
+                    },
+                )
+            )
             written += 1
         return written
 
@@ -354,7 +366,9 @@ class TrackerRunner:
             sync_error = f"event sync failed: {e}"
             _log.warning(
                 "Event sync failed for %s@%s (%s) — snapshotting anyway",
-                adapter.info.protocol_id, chain.value, e,
+                adapter.info.protocol_id,
+                chain.value,
+                e,
             )
         positions, alerts, missing_prices = self.snapshot_adapter(adapter, wallet, chain)
         return new_ev, positions, alerts, missing_prices, sync_error
@@ -406,8 +420,8 @@ class TrackerRunner:
                     key = f"{pid}@{chain.value}"
 
                     try:
-                        new_ev, positions, alerts, missing, sync_error = (
-                            self._sync_and_snapshot(adapter, wallet, chain)
+                        new_ev, positions, alerts, missing, sync_error = self._sync_and_snapshot(
+                            adapter, wallet, chain
                         )
                     except Exception as e:
                         _log.warning("Adapter %s failed: %s", key, e)

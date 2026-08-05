@@ -208,9 +208,7 @@ def test_iter_event_batches_honors_deadline_after_banking_cursor(
 
 def test_default_iter_event_batches_wraps_fetch_events(adapter: MachineXAdapter):
     """fetch_events flattens exactly what iter_event_batches yields."""
-    with patch.object(
-        adapter, "iter_event_batches", return_value=iter([["a"], [], ["b", "c"]])
-    ):
+    with patch.object(adapter, "iter_event_batches", return_value=iter([["a"], [], ["b", "c"]])):
         assert adapter.fetch_events(TEST_WALLET, Chain.PEAQ) == ["a", "b", "c"]
 
 
@@ -451,7 +449,9 @@ def test_get_logs_chunked_sleeps_between_chunks():
 def test_fetch_positions_queries_subgraph(adapter: MachineXAdapter):
     """fetch_positions calls the subgraph, not the RPC enumerator."""
     with (
-        patch.object(adapter, "_run_subgraph_query", return_value={"clPositions": [], "legacyPositions": []}) as mock_sg,
+        patch.object(
+            adapter, "_run_subgraph_query", return_value={"clPositions": [], "legacyPositions": []}
+        ) as mock_sg,
         patch("defi_tracker.adapters.machinex.rpc_enumerate_positions_v3") as mock_rpc,
     ):
         result = adapter.fetch_positions(TEST_WALLET, Chain.PEAQ)
@@ -597,7 +597,12 @@ def test_amount_ratio_used_before_subgraph(adapter: MachineXAdapter, mock_subgra
     ):
         ev = adapter._log_to_event(
             _fake_log(amt0=4 * 10**6, amt1=2 * 10**18),
-            TEST_WALLET, Chain.PEAQ, "pool:1:2:3", t0, t1, EventKind.DEPOSIT,
+            TEST_WALLET,
+            Chain.PEAQ,
+            "pool:1:2:3",
+            t0,
+            t1,
+            EventKind.DEPOSIT,
         )
 
     assert ev is not None
@@ -606,9 +611,7 @@ def test_amount_ratio_used_before_subgraph(adapter: MachineXAdapter, mock_subgra
     mock_subgraph.assert_not_called()
 
 
-def test_subgraph_price_single_attempts_and_negative_cache(
-    adapter: MachineXAdapter, mock_subgraph
-):
+def test_subgraph_price_single_attempts_and_negative_cache(adapter: MachineXAdapter, mock_subgraph):
     mock_subgraph.return_value.json.return_value = {
         "errors": [{"message": "bad indexers: {0xdead: Unavailable(missing block)}"}]
     }
@@ -751,9 +754,12 @@ def test_cl_position_prefers_rpc_fee_math(adapter: MachineXAdapter):
         "id": "42",
         "liquidity": "1000000",
         "pool": {
-            "id": "0x" + "ee" * 20, "sqrtPrice": str(2**96), "tick": "100",
+            "id": "0x" + "ee" * 20,
+            "sqrtPrice": str(2**96),
+            "tick": "100",
             "feeTier": "10000",
-            "feeGrowthGlobal0X128": "0", "feeGrowthGlobal1X128": "0",
+            "feeGrowthGlobal0X128": "0",
+            "feeGrowthGlobal1X128": "0",
         },
         "token0": {"id": "0x" + "aa" * 20, "symbol": "AAA", "decimals": "18", "priceUSD": "1"},
         "token1": {"id": "0x" + "bb" * 20, "symbol": "BBB", "decimals": "18", "priceUSD": "1"},
@@ -782,9 +788,12 @@ def test_cl_position_falls_back_to_subgraph_fee_math_without_rpc(adapter: Machin
         "id": "42",
         "liquidity": "1000000",
         "pool": {
-            "id": "0x" + "ee" * 20, "sqrtPrice": str(2**96), "tick": "100",
+            "id": "0x" + "ee" * 20,
+            "sqrtPrice": str(2**96),
+            "tick": "100",
             "feeTier": "10000",
-            "feeGrowthGlobal0X128": "0", "feeGrowthGlobal1X128": "0",
+            "feeGrowthGlobal0X128": "0",
+            "feeGrowthGlobal1X128": "0",
         },
         "token0": {"id": "0x" + "aa" * 20, "symbol": "AAA", "decimals": "18", "priceUSD": "1"},
         "token1": {"id": "0x" + "bb" * 20, "symbol": "BBB", "decimals": "18", "priceUSD": "1"},
@@ -793,9 +802,7 @@ def test_cl_position_falls_back_to_subgraph_fee_math_without_rpc(adapter: Machin
         "feeGrowthInside0LastX128": "0",
         "feeGrowthInside1LastX128": "0",
     }
-    with patch(
-        "defi_tracker.adapters.machinex.compute_unclaimed_fees_v3"
-    ) as mock_rpc_fees:
+    with patch("defi_tracker.adapters.machinex.compute_unclaimed_fees_v3") as mock_rpc_fees:
         built = adapter._build_cl_position(TEST_WALLET, Chain.PEAQ, pos_data)
 
     assert built is not None

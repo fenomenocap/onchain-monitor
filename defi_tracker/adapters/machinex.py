@@ -86,6 +86,7 @@ WINDOW_BLOCKS = 25_000
 
 # ── Subgraph query ────────────────────────────────────────────────────────
 
+
 def _build_query(wallet: str) -> str:
     w = wallet.lower()
     return f"""
@@ -289,7 +290,7 @@ class MachineXAdapter(BaseAdapter):
                 protocol_id=self.info.protocol_id,
                 position_key=f"{pool_addr}:{tick_lower}:{tick_upper}:{token_id}",
                 protocol_kind=ProtocolKind.CL_AMM,
-                pair_label=f"{token0.symbol}/{token1.symbol} {fee_tier/10000:.2f}%",
+                pair_label=f"{token0.symbol}/{token1.symbol} {fee_tier / 10000:.2f}%",
                 tokens=[token0, token1],
                 current_value_usd=lp_value_usd,
                 current_balances=[TokenAmount(token0, current0), TokenAmount(token1, current1)],
@@ -431,9 +432,7 @@ class MachineXAdapter(BaseAdapter):
 
         for win_start in range(from_block, to_block + 1, WINDOW_BLOCKS):
             win_end = min(win_start + WINDOW_BLOCKS - 1, to_block)
-            events = self._scan_window(
-                wallet, chain, tid_meta, tid_topics, win_start, win_end
-            )
+            events = self._scan_window(wallet, chain, tid_meta, tid_topics, win_start, win_end)
             yield events
             # The runner has persisted this batch — safe to advance. No
             # try/finally: if the consumer's upsert raised, the cursor must
@@ -445,13 +444,12 @@ class MachineXAdapter(BaseAdapter):
             if deadline is not None and time.monotonic() > deadline:
                 _log.info(
                     "MachineX scan pausing at block %d for %s (time budget) — resumes next run",
-                    win_end + 1, wallet[:10],
+                    win_end + 1,
+                    wallet[:10],
                 )
                 return
 
-    def fetch_events(
-        self, wallet: str, chain: Chain, since_ts: int = 0
-    ) -> list[Event]:
+    def fetch_events(self, wallet: str, chain: Chain, since_ts: int = 0) -> list[Event]:
         """Flatten iter_event_batches — kept for the ABC contract and scripts."""
         return [
             ev
@@ -520,9 +518,7 @@ class MachineXAdapter(BaseAdapter):
                     prev0, prev1 = decrease_raw.get(dkey, (0, 0))
                     decrease_raw[dkey] = (prev0 + decoded[1], prev1 + decoded[2])
             position_key, token0, token1 = tid_meta[raw_tid]
-            ev = self._log_to_event(
-                log, wallet, chain, position_key, token0, token1, kind
-            )
+            ev = self._log_to_event(log, wallet, chain, position_key, token0, token1, kind)
             if ev:
                 events.append(ev)
 
@@ -552,7 +548,13 @@ class MachineXAdapter(BaseAdapter):
                 netted = True
             position_key, token0, token1 = tid_meta[raw_tid]
             ev = self._log_to_event(
-                log, wallet, chain, position_key, token0, token1, EventKind.COLLECT,
+                log,
+                wallet,
+                chain,
+                position_key,
+                token0,
+                token1,
+                EventKind.COLLECT,
                 raw_amounts=fee_override,
             )
             if ev:
@@ -633,7 +635,8 @@ class MachineXAdapter(BaseAdapter):
             if not ts:
                 _log.warning(
                     "Skipping event %s: could not resolve block timestamp for block %d",
-                    tx_hash, block_number,
+                    tx_hash,
+                    block_number,
                 )
                 return None
 
@@ -642,7 +645,9 @@ class MachineXAdapter(BaseAdapter):
             p0: Decimal | None = pp0.price_usd if pp0 else None
             p1: Decimal | None = pp1.price_usd if pp1 else None
 
-            def _ratio_fill(p0: Decimal | None, p1: Decimal | None) -> tuple[Decimal | None, Decimal | None]:
+            def _ratio_fill(
+                p0: Decimal | None, p1: Decimal | None
+            ) -> tuple[Decimal | None, Decimal | None]:
                 abs0, abs1 = abs(amt0), abs(amt1)
                 if p0 is None and p1 is not None and abs1 > 0 and abs0 > 0:
                     return abs1 * p1 / abs0, p1
@@ -663,7 +668,10 @@ class MachineXAdapter(BaseAdapter):
             if p0 is None or p1 is None:
                 _log.warning(
                     "Skipping event %s: no price for %s/%s at ts=%d",
-                    tx_hash, token0.symbol, token1.symbol, ts,
+                    tx_hash,
+                    token0.symbol,
+                    token1.symbol,
+                    ts,
                 )
                 return None
 
@@ -734,9 +742,7 @@ class MachineXAdapter(BaseAdapter):
         short = addr[:6] + "…" + addr[-4:]
         return Token(chain, addr, short, 18)
 
-    def _subgraph_historical_price(
-        self, token_address: str, block: int, ts: int
-    ) -> Decimal | None:
+    def _subgraph_historical_price(self, token_address: str, block: int, ts: int) -> Decimal | None:
         """Historical token price from the subgraph, best-effort.
 
         Tries tokenDayDatas for the event's UTC day first — served from
@@ -819,6 +825,7 @@ class MachineXAdapter(BaseAdapter):
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
+
 
 def _subgraph_price(token_data: dict) -> Decimal:
     """Extract priceUSD from a subgraph token dict, returning Decimal('0') on missing/zero."""

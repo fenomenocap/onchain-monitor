@@ -316,7 +316,9 @@ SEL_V3_POSITIONS = _selector("positions(uint256)")
 SEL_V3_BALANCE_OF = _selector("balanceOf(address)")
 SEL_V3_TOKEN_OF_OWNER_BY_INDEX = _selector("tokenOfOwnerByIndex(address,uint256)")
 SEL_V3_GET_POOL = _selector("getPool(address,address,uint24)")
-SEL_V3_GET_POOL_INT24 = _selector("getPool(address,address,int24)")  # MachineX: third arg is tickSpacing
+SEL_V3_GET_POOL_INT24 = _selector(
+    "getPool(address,address,int24)"
+)  # MachineX: third arg is tickSpacing
 SEL_V3_SLOT0 = _selector("slot0()")
 SEL_V3_FEE_GROWTH_GLOBAL0 = _selector("feeGrowthGlobal0X128()")
 SEL_V3_FEE_GROWTH_GLOBAL1 = _selector("feeGrowthGlobal1X128()")
@@ -329,9 +331,7 @@ TOPIC_V3_INCREASE_LIQUIDITY = _keccak256(
 TOPIC_V3_DECREASE_LIQUIDITY = _keccak256(
     b"DecreaseLiquidity(uint256,uint128,uint256,uint256)"
 ).hex()
-TOPIC_V3_COLLECT = _keccak256(
-    b"Collect(uint256,address,uint256,uint256)"
-).hex()
+TOPIC_V3_COLLECT = _keccak256(b"Collect(uint256,address,uint256,uint256)").hex()
 
 # Standard ERC20 Transfer(address,address,uint256) — used to measure actual
 # fee payouts for pure-harvest calls (liquidity unchanged), since neither the
@@ -340,9 +340,7 @@ TOPIC_V3_COLLECT = _keccak256(
 TOPIC_ERC20_TRANSFER = _keccak256(b"Transfer(address,address,uint256)").hex()
 
 
-def sum_transfers_to(
-    receipt: dict, token_address: str, recipient: str
-) -> int:
+def sum_transfers_to(receipt: dict, token_address: str, recipient: str) -> int:
     """
     Sum raw ERC20 Transfer amounts for `token_address` paid to `recipient`
     in a transaction receipt. Returns 0 if the receipt has no matching logs.
@@ -620,7 +618,9 @@ def compute_unclaimed_fees_v3(
     if liquidity <= 0:
         return Decimal("0"), Decimal("0"), Decimal("0")
 
-    pool = rpc_get_pool_address_v3(rpc, factory, token0_addr, token1_addr, fee, int24_third_arg=int24_third_arg)
+    pool = rpc_get_pool_address_v3(
+        rpc, factory, token0_addr, token1_addr, fee, int24_third_arg=int24_third_arg
+    )
     if not pool:
         return Decimal("0"), Decimal("0"), Decimal("0")
 
