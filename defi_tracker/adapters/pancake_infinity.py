@@ -218,8 +218,7 @@ class PancakeInfinityAdapter(BaseAdapter):
 
             if p0 is None or p1 is None:
                 _log.warning(
-                    "Skipping event %s: no price for %s/%s at ts=%d — "
-                    "will retry on next sync",
+                    "Skipping event %s: no price for %s/%s at ts=%d — will retry on next sync",
                     ev.get("transaction", {}).get("id", "?"),
                     token0.symbol,
                     token1.symbol,
@@ -405,9 +404,7 @@ class PancakeInfinityAdapter(BaseAdapter):
             # Subgraph outage (e.g. the deterministic indexing error that froze
             # BSC marks from 2026-07-07): rebuild positions from stored state +
             # live chain reads instead of leaving snapshots stale.
-            _log.warning(
-                "Pancake subgraph unavailable (%s) — reconstructing positions via RPC", e
-            )
+            _log.warning("Pancake subgraph unavailable (%s) — reconstructing positions via RPC", e)
             return self._fetch_positions_rpc(wallet, chain)
         if not raw_events:
             return []
@@ -502,7 +499,11 @@ class PancakeInfinityAdapter(BaseAdapter):
                         unclaimed0, unclaimed1, unclaimed_usd = u0, u1, u_usd
                         break
             except Exception as e:
-                _log.warning("BSC RPC fee computation failed for pool %s: %s — unclaimed set to 0", pool_id, e)
+                _log.warning(
+                    "BSC RPC fee computation failed for pool %s: %s — unclaimed set to 0",
+                    pool_id,
+                    e,
+                )
 
             # Pool context for APR
             pool_day = pool.get("poolDayData", [])
@@ -572,9 +573,7 @@ class PancakeInfinityAdapter(BaseAdapter):
         fee context is carried forward from the last snapshot.
         """
         if self._rpc is None:
-            raise RuntimeError(
-                "Pancake subgraph down and no BSC RPC configured — cannot snapshot"
-            )
+            raise RuntimeError("Pancake subgraph down and no BSC RPC configured — cannot snapshot")
 
         pid = self.info.protocol_id
         identities = self._storage.open_position_identities(wallet, chain, pid)
@@ -593,16 +592,19 @@ class PancakeInfinityAdapter(BaseAdapter):
             snap_meta = json.loads(row["meta_json"]) if row["meta_json"] else {}
             token_id = snap_meta.get("token_id")
             if not token_id:
-                raise RuntimeError(
-                    f"No stored tokenId for {position_key} — cannot verify on-chain"
-                )
+                raise RuntimeError(f"No stored tokenId for {position_key} — cannot verify on-chain")
 
             pool_id, tick_lower_s, tick_upper_s = position_key.rsplit(":", 2)
             tick_lower, tick_upper = int(tick_lower_s), int(tick_upper_s)
 
             pos_state = rpc_get_position(
-                self._rpc, CL_POOL_MANAGER, CL_POS_MANAGER,
-                pool_id, tick_lower, tick_upper, int(token_id),
+                self._rpc,
+                CL_POOL_MANAGER,
+                CL_POS_MANAGER,
+                pool_id,
+                tick_lower,
+                tick_upper,
+                int(token_id),
             )
             if pos_state is None:
                 raise RuntimeError(
@@ -612,7 +614,8 @@ class PancakeInfinityAdapter(BaseAdapter):
             if net_liquidity <= 0:
                 _log.info(
                     "RPC fallback: %s (tokenId %s) has zero on-chain liquidity — closed",
-                    position_key, token_id,
+                    position_key,
+                    token_id,
                 )
                 continue
 
@@ -658,9 +661,7 @@ class PancakeInfinityAdapter(BaseAdapter):
 
             pool_liquidity = pool_liquidity_cache.get(pool_id)
             share_pct = (
-                Decimal(net_liquidity) / Decimal(pool_liquidity) * 100
-                if pool_liquidity
-                else None
+                Decimal(net_liquidity) / Decimal(pool_liquidity) * 100 if pool_liquidity else None
             )
             first_ts, last_ts = self._storage.event_ts_bounds(wallet, chain, pid, position_key)
 
@@ -750,9 +751,7 @@ class PancakeInfinityAdapter(BaseAdapter):
         elif p1 is None and p0 is not None:
             # price_from_sqrt with price1=1 returns the pool's token1-per-token0
             # ratio itself; inverting it prices token1 from token0.
-            ratio = self.price_from_sqrt(
-                sqrt_price, token0.decimals, token1.decimals, Decimal("1")
-            )
+            ratio = self.price_from_sqrt(sqrt_price, token0.decimals, token1.decimals, Decimal("1"))
             p1 = p0 / ratio if ratio else None
         if p0 is None or p1 is None:
             raise RuntimeError(

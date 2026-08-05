@@ -110,7 +110,12 @@ class BaseAdapter(ProtocolAdapter):
                     self._current_price_cache[addr] = price
                     return PricePoint(token.key, price, int(time.time()), "coingecko_id")
             except Exception as e:
-                _log.warning("CoinGecko coin-ID price fetch failed for %s (%s): %s", coin_id, token.address, e)
+                _log.warning(
+                    "CoinGecko coin-ID price fetch failed for %s (%s): %s",
+                    coin_id,
+                    token.address,
+                    e,
+                )
         return None
 
     def get_historical_price(self, token: Token, ts: int) -> PricePoint | None:
@@ -173,7 +178,9 @@ class BaseAdapter(ProtocolAdapter):
             try:
                 r = requests.post(url, json={"query": query}, timeout=30)
                 if r.status_code in (401, 403):
-                    raise RuntimeError(f"Subgraph auth failed (HTTP {r.status_code}) — check API key")
+                    raise RuntimeError(
+                        f"Subgraph auth failed (HTTP {r.status_code}) — check API key"
+                    )
                 r.raise_for_status()
                 j = r.json()
                 if "errors" in j:
@@ -181,7 +188,9 @@ class BaseAdapter(ProtocolAdapter):
                     if any("bad indexers" in m for m in msgs) and attempt < retries - 1:
                         _log.warning(
                             "Subgraph bad indexers (attempt %d/%d), retrying in %.0fs…",
-                            attempt + 1, retries, self._INDEXER_RETRY_SLEEP,
+                            attempt + 1,
+                            retries,
+                            self._INDEXER_RETRY_SLEEP,
                         )
                         time.sleep(self._INDEXER_RETRY_SLEEP)
                         continue

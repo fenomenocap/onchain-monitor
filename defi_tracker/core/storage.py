@@ -274,9 +274,7 @@ class Storage:
         # v1 → v2: snapshots.is_closed tombstone flag
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(snapshots)")}
         if "is_closed" not in cols:
-            conn.execute(
-                "ALTER TABLE snapshots ADD COLUMN is_closed INTEGER NOT NULL DEFAULT 0"
-            )
+            conn.execute("ALTER TABLE snapshots ADD COLUMN is_closed INTEGER NOT NULL DEFAULT 0")
         # Backfill in_range from ticks for rows an adapter left null (RPC
         # fallbacks). Idempotent — only touches rows still null with known
         # ticks; new snapshots derive in_range at Position construction.
@@ -374,9 +372,7 @@ class Storage:
 
     def kv_get(self, key: str) -> str | None:
         with self.connect() as conn:
-            row = conn.execute(
-                "SELECT value FROM kv_store WHERE key = ?", (key,)
-            ).fetchone()
+            row = conn.execute("SELECT value FROM kv_store WHERE key = ?", (key,)).fetchone()
             return row["value"] if row else None
 
     def kv_set(self, key: str, value: str) -> None:
@@ -551,9 +547,7 @@ class Storage:
                 ),
             )
 
-    def open_position_identities(
-        self, wallet: str, chain: Chain, protocol_id: str
-    ) -> list[dict]:
+    def open_position_identities(self, wallet: str, chain: Chain, protocol_id: str) -> list[dict]:
         """Positions whose most recent snapshot is not a tombstone — i.e. the
         set the runner believed was open as of the last successful pass.
         Returns dicts with position_key, pair_label, protocol_kind."""
@@ -1008,10 +1002,7 @@ class Storage:
             GROUP BY w.wallet, w.chain, w.protocol_id, w.position_key
         """
         with self.connect() as conn:
-            return [
-                dict(r)
-                for r in conn.execute(sql, {"cutoff": f"-{days} days"}).fetchall()
-            ]
+            return [dict(r) for r in conn.execute(sql, {"cutoff": f"-{days} days"}).fetchall()]
 
     def collects_since(self, since_date: str) -> list[dict]:
         """COLLECT events on/after an ISO date (per position), for window yields."""
@@ -1050,9 +1041,7 @@ class Storage:
         with self.connect() as conn:
             return [
                 dict(r)
-                for r in conn.execute(
-                    sql, {"w": wallet.lower() if wallet else None}
-                ).fetchall()
+                for r in conn.execute(sql, {"w": wallet.lower() if wallet else None}).fetchall()
             ]
 
     # ── Alerts ────────────────────────────────────────────────────────────
@@ -1091,9 +1080,7 @@ class Storage:
         with self.connect() as conn:
             conn.execute("UPDATE alerts SET delivered_at=? WHERE id=?", (now, alert_id))
 
-    def list_alerts(
-        self, limit: int = 50, undelivered_only: bool = False
-    ) -> list[dict]:
+    def list_alerts(self, limit: int = 50, undelivered_only: bool = False) -> list[dict]:
         """Return recent alerts ordered by triggered_at DESC."""
         sql = "SELECT * FROM alerts"
         if undelivered_only:
@@ -1150,11 +1137,19 @@ class Storage:
                 ).fetchall()
             }
             for uid, sig in flagged.items():
-                ctx = json.dumps({
-                    k: sig.get(k)
-                    for k in ("idle_usd", "depth", "days_out", "forgone_usd",
-                              "current_half_pct", "suggest")
-                })
+                ctx = json.dumps(
+                    {
+                        k: sig.get(k)
+                        for k in (
+                            "idle_usd",
+                            "depth",
+                            "days_out",
+                            "forgone_usd",
+                            "current_half_pct",
+                            "suggest",
+                        )
+                    }
+                )
                 row = live.get(uid)
                 if row is None:
                     if uid in recently_resolved:

@@ -563,7 +563,10 @@ class TestRunnerBatchSync:
     def test_sync_adapter_persists_each_batch_and_watermarks(self, storage, make_event):
         from defi_tracker.core.runner import TrackerRunner
 
-        b1 = [make_event(ts=1_714_521_600, tx_hash="0x01"), make_event(ts=1_714_525_200, tx_hash="0x02")]
+        b1 = [
+            make_event(ts=1_714_521_600, tx_hash="0x01"),
+            make_event(ts=1_714_525_200, tx_hash="0x02"),
+        ]
         b2 = [make_event(ts=1_714_608_000, tx_hash="0x03")]
         adapter = _BatchStubAdapter([b1, b2])
         runner = TrackerRunner(storage)
@@ -573,13 +576,10 @@ class TestRunnerBatchSync:
         assert inserted == 3
         assert adapter.batches_requested == 2
         assert (
-            storage.get_last_synced_ts(TEST_WALLET, Chain.BSC, "pancake_infinity")
-            == 1_714_608_000
+            storage.get_last_synced_ts(TEST_WALLET, Chain.BSC, "pancake_infinity") == 1_714_608_000
         )
 
-    def test_sync_adapter_force_stops_deadline_ignoring_adapter(
-        self, storage, make_event
-    ):
+    def test_sync_adapter_force_stops_deadline_ignoring_adapter(self, storage, make_event):
         import time
 
         from defi_tracker.core.runner import _DEADLINE_GRACE, TrackerRunner
@@ -592,7 +592,9 @@ class TestRunnerBatchSync:
         # Deadline + grace already exhausted → runner fallback stops after
         # the first batch is persisted
         inserted = runner.sync_adapter(
-            adapter, TEST_WALLET, Chain.BSC,
+            adapter,
+            TEST_WALLET,
+            Chain.BSC,
             deadline=time.monotonic() - _DEADLINE_GRACE - 1,
         )
 
@@ -600,8 +602,7 @@ class TestRunnerBatchSync:
         assert adapter.batches_requested == 1
         # First batch's watermark is kept
         assert (
-            storage.get_last_synced_ts(TEST_WALLET, Chain.BSC, "pancake_infinity")
-            == 1_714_521_600
+            storage.get_last_synced_ts(TEST_WALLET, Chain.BSC, "pancake_infinity") == 1_714_521_600
         )
 
     def test_sync_adapter_empty_batches_never_advance_watermark(self, storage, make_event):
@@ -626,8 +627,7 @@ class TestRunnerBatchSync:
 
         assert inserted == 1
         assert (
-            storage.get_last_synced_ts(TEST_WALLET, Chain.BSC, "pancake_infinity")
-            == 1_714_521_600
+            storage.get_last_synced_ts(TEST_WALLET, Chain.BSC, "pancake_infinity") == 1_714_521_600
         )
 
 
@@ -711,9 +711,7 @@ class TestTombstones:
         # Rewind to a v1-shaped DB: drop the v2 column and stored version
         with storage.connect() as conn:
             conn.execute("ALTER TABLE snapshots DROP COLUMN is_closed")
-            conn.execute(
-                "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', '1')"
-            )
+            conn.execute("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', '1')")
 
         storage.init_schema()  # applies the migration
 
@@ -783,9 +781,9 @@ class TestTombstones:
 
         storage.add_wallet(TEST_WALLET)
         adapter = _RaisingSyncAdapter([], positions=[make_position()])
-        new_ev, positions, alerts, missing, sync_error = TrackerRunner(
-            storage
-        )._sync_and_snapshot(adapter, TEST_WALLET, Chain.BSC)
+        new_ev, positions, alerts, missing, sync_error = TrackerRunner(storage)._sync_and_snapshot(
+            adapter, TEST_WALLET, Chain.BSC
+        )
 
         assert new_ev == 0
         assert len(positions) == 1
@@ -883,9 +881,7 @@ class TestTransitionAlerts:
         alerts = list(evaluate_alerts(pos, pnl, AlertConfig(), prev=was_bad))
         assert self._get(alerts, "IL_THRESHOLD").context["transition"] is False
 
-    def test_runner_dedup_uses_reminder_window_for_steady_state(
-        self, storage, make_position
-    ):
+    def test_runner_dedup_uses_reminder_window_for_steady_state(self, storage, make_position):
         import time as _time
 
         from defi_tracker.core.runner import TrackerRunner
@@ -910,7 +906,9 @@ class TestTransitionAlerts:
             )
         )
 
-        adapter = _BatchStubAdapter([], positions=[make_position(in_range=False, tick_current=250000)])
+        adapter = _BatchStubAdapter(
+            [], positions=[make_position(in_range=False, tick_current=250000)]
+        )
         # Exercise the reminder-window dedup on OUT_OF_RANGE specifically.
         runner = TrackerRunner(storage, AlertConfig(push_kinds=frozenset({"OUT_OF_RANGE"})))
         _, fresh, _ = runner.snapshot_adapter(adapter, TEST_WALLET, Chain.BSC)
@@ -938,7 +936,9 @@ class TestTransitionAlerts:
             )
         )
 
-        adapter = _BatchStubAdapter([], positions=[make_position(in_range=False, tick_current=250000)])
+        adapter = _BatchStubAdapter(
+            [], positions=[make_position(in_range=False, tick_current=250000)]
+        )
         runner = TrackerRunner(storage, AlertConfig(push_kinds=frozenset({"OUT_OF_RANGE"})))
         _, fresh, _ = runner.snapshot_adapter(adapter, TEST_WALLET, Chain.BSC)
 
@@ -954,7 +954,9 @@ class TestTransitionAlerts:
             position=make_position(in_range=True),
             snapshot_date=(datetime.now(UTC) - timedelta(days=1)).date(),
         )
-        adapter = _BatchStubAdapter([], positions=[make_position(in_range=False, tick_current=250000)])
+        adapter = _BatchStubAdapter(
+            [], positions=[make_position(in_range=False, tick_current=250000)]
+        )
         runner = TrackerRunner(storage, AlertConfig(push_kinds=frozenset({"OUT_OF_RANGE"})))
         _, fresh, _ = runner.snapshot_adapter(adapter, TEST_WALLET, Chain.BSC)
 
@@ -967,9 +969,7 @@ class TestTransitionAlerts:
 
 
 class TestPortfolioRollups:
-    def _collect_row(
-        self, month_ts, usd, symbols=("WPEAQ", "USDT"), chain="peaq", meta=None
-    ):
+    def _collect_row(self, month_ts, usd, symbols=("WPEAQ", "USDT"), chain="peaq", meta=None):
         import json as _json
 
         return {
@@ -1008,8 +1008,12 @@ class TestPortfolioRollups:
             return {
                 "month": f"{y:04d}-{mo:02d}",
                 "ts": int(datetime(y, mo, d, 12, tzinfo=UTC).timestamp()),
-                "wallet": TEST_WALLET, "chain": "peaq", "protocol_id": "machinex",
-                "position_key": "p:1:2:3", "amounts_json": "[]", "usd_at_ts": usd,
+                "wallet": TEST_WALLET,
+                "chain": "peaq",
+                "protocol_id": "machinex",
+                "position_key": "p:1:2:3",
+                "amounts_json": "[]",
+                "usd_at_ts": usd,
             }
 
         raw = [_c(2026, 7, 1, 10_000.0), _c(2026, 6, 15, 500.0)]
@@ -1054,45 +1058,59 @@ class TestPortfolioRollups:
 
         def snap(pk, value, lo, hi, cur, in_range):
             return {
-                "wallet": TEST_WALLET, "position_key": pk, "pair_label": pk,
-                "chain": "peaq", "protocol_id": "machinex",
-                "current_value_usd": value, "tick_lower": lo, "tick_upper": hi,
-                "tick_current": cur, "in_range": in_range,
+                "wallet": TEST_WALLET,
+                "position_key": pk,
+                "pair_label": pk,
+                "chain": "peaq",
+                "protocol_id": "machinex",
+                "current_value_usd": value,
+                "tick_lower": lo,
+                "tick_upper": hi,
+                "tick_current": cur,
+                "in_range": in_range,
             }
 
         # Range width 1000 ticks. depth = beyond ÷ width.
         snaps = [
-            snap("deep", 8000, 0, 1000, 1600, 0),      # depth 0.60 → now
+            snap("deep", 8000, 0, 1000, 1600, 0),  # depth 0.60 → now
             snap("moderate", 7000, 0, 1000, 1250, 0),  # depth 0.25 → soon
-            snap("shallow", 6000, 0, 1000, 1100, 0),   # depth 0.10 → watch
-            snap("small", 1000, 0, 1000, 2000, 0),     # deep but $ below floor
-            snap("inrange", 50000, 0, 1000, 500, 1),   # in range → not flagged
-            snap("earning", 9000, 0, 1000, 1600, 0),   # deep but still earning
+            snap("shallow", 6000, 0, 1000, 1100, 0),  # depth 0.10 → watch
+            snap("small", 1000, 0, 1000, 2000, 0),  # deep but $ below floor
+            snap("inrange", 50000, 0, 1000, 500, 1),  # in range → not flagged
+            snap("earning", 9000, 0, 1000, 1600, 0),  # deep but still earning
         ]
         yields = {
             (TEST_WALLET, "inrange"): {"apy_pct": 20.0},
             (TEST_WALLET, "earning"): {"apy_pct": 40.0},
         }  # deep/moderate/shallow absent → yield None → dead
-        sigs = rebalance_signals(
-            snaps, yields, {}, RebalanceConfig(idle_min_usd=Decimal("6500"))
-        )
+        sigs = rebalance_signals(snaps, yields, {}, RebalanceConfig(idle_min_usd=Decimal("6500")))
         by = {s["position_key"]: s for s in sigs}
         assert by["deep"]["tier"] == "now"
         assert by["moderate"]["tier"] == "soon"
-        assert "shallow" not in by      # below the 6500 floor set here
-        assert "small" not in by        # below floor
-        assert "inrange" not in by      # in range
+        assert "shallow" not in by  # below the 6500 floor set here
+        assert "small" not in by  # below floor
+        assert "inrange" not in by  # in range
         assert by["earning"]["tier"] == "watch"  # deep but yield ≥ 5% → not dead
-        assert sigs[0]["tier"] == "now"          # sorted now→soon→watch
+        assert sigs[0]["tier"] == "now"  # sorted now→soon→watch
         # forgone = idle × value-weighted in-range yield (20%)
         assert abs(by["deep"]["forgone_usd"] - 8000 * 0.20) < 1
 
     def test_rebalance_queue_lifecycle(self, storage):
         import time as _time
 
-        sig = [{"uid": "w:peaq:machinex:P", "pair": "X/Y", "tier": "now",
-                "idle_usd": 6000, "depth": 0.8, "days_out": None, "forgone_usd": 100,
-                "current_half_pct": 50, "suggest": {"half_pct": 120}}]
+        sig = [
+            {
+                "uid": "w:peaq:machinex:P",
+                "pair": "X/Y",
+                "tier": "now",
+                "idle_usd": 6000,
+                "depth": 0.8,
+                "days_out": None,
+                "forgone_usd": 100,
+                "current_half_pct": 50,
+                "suggest": {"half_pct": 120},
+            }
+        ]
 
         # First sight → one open item.
         storage.reconcile_rebalance_queue(sig)
@@ -1111,7 +1129,7 @@ class TestPortfolioRollups:
         # even though the (stale) signal still flags it.
         assert storage.resolve_rebalance_item(item_id) is True
         storage.reconcile_rebalance_queue(sig)
-        assert storage.list_rebalance_queue() == []          # nothing live
+        assert storage.list_rebalance_queue() == []  # nothing live
         assert len(storage.list_rebalance_queue(include_resolved=True)) == 1
 
         # No longer flagged → auto-resolve is a no-op (already resolved).
@@ -1119,9 +1137,19 @@ class TestPortfolioRollups:
         assert storage.list_rebalance_queue() == []
 
     def test_rebalance_queue_auto_resolves_when_unflagged(self, storage):
-        sig = [{"uid": "w:peaq:machinex:Q", "pair": "A/B", "tier": "soon",
-                "idle_usd": 7000, "depth": 0.3, "days_out": 5, "forgone_usd": 50,
-                "current_half_pct": 40, "suggest": None}]
+        sig = [
+            {
+                "uid": "w:peaq:machinex:Q",
+                "pair": "A/B",
+                "tier": "soon",
+                "idle_usd": 7000,
+                "depth": 0.3,
+                "days_out": 5,
+                "forgone_usd": 50,
+                "current_half_pct": 40,
+                "suggest": None,
+            }
+        ]
         storage.reconcile_rebalance_queue(sig)
         assert len(storage.list_rebalance_queue()) == 1
         # Position rebalanced → no longer flagged → drops off automatically.
@@ -1137,8 +1165,13 @@ class TestPortfolioRollups:
 
         # Daily tick series for one pool: deltas [+100,-100,+100,-100], mean 0.
         hist = [
-            {"snapshot_date": f"2026-07-0{d}", "chain": "peaq", "pair_label": "A/B",
-             "tick_current": t, "is_closed": 0}
+            {
+                "snapshot_date": f"2026-07-0{d}",
+                "chain": "peaq",
+                "pair_label": "A/B",
+                "tick_current": t,
+                "is_closed": 0,
+            }
             for d, t in [(1, 0), (2, 100), (3, 0), (4, 100), (5, 0)]
         ]
         vol = pool_tick_volatility(hist, min_points=3)
@@ -1156,11 +1189,20 @@ class TestPortfolioRollups:
     def test_rebalance_signals_attaches_suggested_range(self):
         from defi_tracker.analytics import RebalanceConfig, rebalance_signals
 
-        snaps = [{
-            "wallet": TEST_WALLET, "position_key": "p", "pair_label": "A/B",
-            "chain": "peaq", "protocol_id": "machinex", "current_value_usd": 9000,
-            "tick_lower": 0, "tick_upper": 1000, "tick_current": 1600, "in_range": 0,
-        }]
+        snaps = [
+            {
+                "wallet": TEST_WALLET,
+                "position_key": "p",
+                "pair_label": "A/B",
+                "chain": "peaq",
+                "protocol_id": "machinex",
+                "current_value_usd": 9000,
+                "tick_lower": 0,
+                "tick_upper": 1000,
+                "tick_current": 1600,
+                "in_range": 0,
+            }
+        ]
         sigs = rebalance_signals(
             snaps, {}, {}, RebalanceConfig(), tick_vol={("peaq", "A/B"): 300.0}
         )
@@ -1272,20 +1314,33 @@ class TestFeesEarnedMtd:
 class TestFeeValuation:
     def _row(self, month, symbol, tk, amt, claim_px, usd):
         import json as _json
+
         return {
-            "month": month, "wallet": TEST_WALLET, "chain": "peaq",
-            "protocol_id": "machinex", "position_key": "p:1",
-            "amounts_json": _json.dumps([{"token_key": tk, "symbol": symbol,
-                                          "amount": str(amt), "price_at_ts": str(claim_px)}]),
+            "month": month,
+            "wallet": TEST_WALLET,
+            "chain": "peaq",
+            "protocol_id": "machinex",
+            "position_key": "p:1",
+            "amounts_json": _json.dumps(
+                [
+                    {
+                        "token_key": tk,
+                        "symbol": symbol,
+                        "amount": str(amt),
+                        "price_at_ts": str(claim_px),
+                    }
+                ]
+            ),
             "usd_at_ts": usd,
         }
 
     def test_harvest_vs_today_split(self):
         from defi_tracker.analytics import fee_valuation
+
         # 100 WPEAQ harvested at $0.13 = $13; today WPEAQ $0.02 → $2
         rows = [self._row("2025-10", "WPEAQ", "peaq:0xw", 100, "0.13", 13.0)]
         v = fee_valuation(rows, {"peaq:0xw": Decimal("0.02")})
-        assert v["claim_total"] == Decimal("13.0")   # matches stored usd_at_ts
+        assert v["claim_total"] == Decimal("13.0")  # matches stored usd_at_ts
         assert v["today_by_month"]["2025-10"] == Decimal("2.00")
         sym, claim, today = v["by_token_drop"][0]
         assert sym == "WPEAQ" and claim == Decimal("13") and today == Decimal("2")
@@ -1293,6 +1348,7 @@ class TestFeeValuation:
 
     def test_missing_price_falls_back_to_claim(self):
         from defi_tracker.analytics import fee_valuation
+
         rows = [self._row("2026-01", "OBSCURE", "peaq:0xz", 50, "0.4", 20.0)]
         v = fee_valuation(rows, {})  # no price → assume flat, not zero
         assert v["today_by_month"]["2026-01"] == Decimal("20.0")
@@ -1300,6 +1356,7 @@ class TestFeeValuation:
 
     def test_stablecoin_fees_hold_value(self):
         from defi_tracker.analytics import fee_valuation
+
         rows = [self._row("2026-06", "USDT", "peaq:0xusdt", 500, "1.0", 500.0)]
         v = fee_valuation(rows, {"peaq:0xusdt": Decimal("1.0")})
         assert v["claim_total"] == v["today_total"] == Decimal("500")
@@ -1324,10 +1381,16 @@ class TestRealizedAndWindowYield:
 
     def _wstat(self, pkey, avg, unc_start, unc_end, span):
         return {
-            "wallet": TEST_WALLET, "chain": "peaq", "protocol_id": "machinex",
-            "position_key": pkey, "pair_label": "A/B",
-            "avg_value_usd": avg, "snapshot_days": span + 1, "span_days": span,
-            "unclaimed_start": unc_start, "unclaimed_end": unc_end,
+            "wallet": TEST_WALLET,
+            "chain": "peaq",
+            "protocol_id": "machinex",
+            "position_key": pkey,
+            "pair_label": "A/B",
+            "avg_value_usd": avg,
+            "snapshot_days": span + 1,
+            "span_days": span,
+            "unclaimed_start": unc_start,
+            "unclaimed_end": unc_end,
             "window_start": "2026-06-09",
         }
 
@@ -1337,10 +1400,16 @@ class TestRealizedAndWindowYield:
         # Position earned 30 over 30 days on avg value 3650:
         # 25 collected mid-window + unclaimed went 10 → 15 (Δ +5)
         stats = [self._wstat("p1", 3650.0, 10.0, 15.0, 30)]
-        collects = [{
-            "wallet": TEST_WALLET, "chain": "peaq", "protocol_id": "machinex",
-            "position_key": "p1", "ts": 0, "usd_at_ts": 25.0,
-        }]
+        collects = [
+            {
+                "wallet": TEST_WALLET,
+                "chain": "peaq",
+                "protocol_id": "machinex",
+                "position_key": "p1",
+                "ts": 0,
+                "usd_at_ts": 25.0,
+            }
+        ]
         y = window_yields(stats, collects, window_days=30)
         info = y[(TEST_WALLET, "p1")]
         assert info["earned"] == Decimal("30")

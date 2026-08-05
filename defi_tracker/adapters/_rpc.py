@@ -150,9 +150,7 @@ class RpcClient:
                 time.sleep(wait * (2**attempt))
         _log.warning("eth_getLogs failed after %d attempts: %s", self.max_retries, last_err)
         if raise_on_failure:
-            raise RuntimeError(
-                f"eth_getLogs failed for blocks {from_hex}-{to_hex}: {last_err}"
-            )
+            raise RuntimeError(f"eth_getLogs failed for blocks {from_hex}-{to_hex}: {last_err}")
         return []
 
     # ── ERC20 metadata ────────────────────────────────────────────────────

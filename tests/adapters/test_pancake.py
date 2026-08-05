@@ -364,9 +364,7 @@ def test_fetch_positions_outage_without_rpc_raises(tmp_path: Path):
     """Subgraph down and no RPC configured → loud failure, marks stay stale."""
     db = tmp_path / "test.db"
     Storage(db).init_schema()
-    adapter = PancakeInfinityAdapter(
-        graph_api_key=FAKE_API_KEY, rpc_url="", db_path=str(db)
-    )
+    adapter = PancakeInfinityAdapter(graph_api_key=FAKE_API_KEY, rpc_url="", db_path=str(db))
     with (
         patch.object(adapter, "_run_subgraph_query", return_value=None),
         pytest.raises(RuntimeError, match="no BSC RPC"),
