@@ -1,0 +1,63 @@
+# Secrets
+.env
+.env.local
+.env.*.local
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+tracker.db*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtualenv
+venv/
+env/
+.venv/
+.env/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Local outputs
+reports/
+*.log
+*.json.bak
+
+# Ruff
+.ruff_cache/
+
+# Original reference (the script we're replacing)
+1779797386463_pancake_defi.py
+
+# Internal spreadsheets
+*.xlsx
+
+# Local Claude settings
+.claude/settings.local.json

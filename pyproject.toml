@@ -1,0 +1,149 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "onchain-monitor"
+version = "0.1.0"
+description = "Multi-chain DeFi position tracking — real cost basis, impermanent loss, and PnL across protocols and wallets"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "fenomenocap", email = "fenomenocap@proton.me" }]
+keywords = ["defi", "uniswap", "pancakeswap", "concentrated-liquidity", "impermanent-loss", "lp-tracker"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Office/Business :: Financial",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+]
+dependencies = [
+    "requests>=2.31",
+    "python-dotenv>=1.0",
+    "pycryptodome>=3.19",
+    "eth-hash[pycryptodome]>=0.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "ruff>=0.6",
+    "mypy>=1.10",
+    "bandit[toml]>=1.7",
+    "pip-audit>=2.7",
+    "types-requests>=2.31",
+]
+
+[project.urls]
+Homepage      = "https://github.com/fenomenocap/onchain-monitor"
+Repository    = "https://github.com/fenomenocap/onchain-monitor"
+Issues        = "https://github.com/fenomenocap/onchain-monitor/issues"
+Documentation = "https://github.com/fenomenocap/onchain-monitor#readme"
+
+[project.scripts]
+onchain-monitor = "defi_tracker.cli:main"
+defi-tracker    = "defi_tracker.cli:main"  # legacy alias — keeps existing cron working
+
+[tool.setuptools.packages.find]
+where   = ["."]
+include = ["defi_tracker*"]
+exclude = ["tests*"]
+
+# ─── ruff (lint + format) ────────────────────────────────────────────────
+[tool.ruff]
+line-length    = 100
+target-version = "py311"
+extend-exclude = ["__pycache__", ".pytest_cache", "build", "dist"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "W",   # pycodestyle warnings
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear (likely bugs)
+    "S",   # flake8-bandit (security; redundant with bandit but cheaper)
+    "C4",  # comprehensions
+    "PIE", # misc
+    "RET", # explicit returns
+    "SIM", # simplifications
+]
+ignore = [
+    "E501",  # line length — we have ruff format for layout
+    "S101",  # assert is fine in tests
+    "S311",  # random — we're not doing crypto, just tests
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests can use assert, magic values, hardcoded "credentials" (test wallets)
+"tests/**/*.py" = ["S101", "S105", "S106", "S107"]
+# CLI prints — argparse is the standard pattern
+"defi_tracker/cli/**/*.py" = ["T201"]
+
+[tool.ruff.format]
+quote-style                = "double"
+indent-style               = "space"
+docstring-code-format      = true
+skip-magic-trailing-comma  = false
+
+# ─── mypy ────────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version          = "3.11"
+strict                  = false
+warn_redundant_casts    = true
+warn_unused_ignores     = true
+warn_return_any         = true
+warn_unreachable        = true
+disallow_untyped_defs   = false  # incremental adoption; tighten later
+ignore_missing_imports  = true   # third-party libs without stubs
+
+[[tool.mypy.overrides]]
+# Tests don't need strict typing — they're allowed to be loose
+module                  = "tests.*"
+disallow_untyped_defs   = false
+check_untyped_defs      = false
+
+# ─── pytest ──────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths   = ["tests"]
+python_files = ["test_*.py"]
+addopts     = "-v --tb=short --strict-markers"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests that hit real external services",
+]
+
+[tool.coverage.run]
+source = ["defi_tracker"]
+omit   = [
+    "defi_tracker/cli.py",  # CLI tested via integration
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+
+# ─── bandit (security SAST) ──────────────────────────────────────────────
+[tool.bandit]
+# Tests use assert and hardcoded test data; that's not a real finding.
+# B608 (sql-injection-like) is flagged on dynamically-built SQL — we use
+# parameterized queries throughout but bandit can't always tell, so we
+# rely on the unit tests + code review to cover that surface.
+exclude_dirs = ["tests", "build", "dist", ".venv", "venv"]
+skips = [
+    "B101",  # assert used (fine in non-test code too in our patterns)
+    "B608",  # SQL injection — false positives on parameterized queries
+]
