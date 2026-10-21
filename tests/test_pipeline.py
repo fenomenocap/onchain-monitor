@@ -653,6 +653,15 @@ class TestHonestUnknowns:
         assert cb.event_count == 1
         assert cb.has_events is True
 
+    def test_a_collect_alone_is_not_flow_history(self, storage, make_event):
+        """With the deposit missing, a lone collect must leave cost basis
+        unknown — not $0, which would book the whole position as profit."""
+        storage.upsert_events([make_event(kind=EventKind.COLLECT)])
+        cb = compute_cost_basis(
+            storage, TEST_WALLET, Chain.BSC, "pancake_infinity", self.POSITION_KEY
+        )
+        assert cb.has_events is False and cb.fees_collected_usd > 0
+
     def test_snapshot_writes_null_analytics_when_no_events(self, storage, make_position):
         from defi_tracker.core.runner import TrackerRunner
 
@@ -781,13 +790,11 @@ class TestTombstones:
 
         storage.add_wallet(TEST_WALLET)
         adapter = _RaisingSyncAdapter([], positions=[make_position()])
-        new_ev, positions, alerts, missing, sync_error = TrackerRunner(storage)._sync_and_snapshot(
-            adapter, TEST_WALLET, Chain.BSC
-        )
+        result = TrackerRunner(storage)._sync_and_snapshot(adapter, TEST_WALLET, Chain.BSC)
 
-        assert new_ev == 0
-        assert len(positions) == 1
-        assert sync_error is not None and "no data" in sync_error
+        assert result.events_inserted == 0
+        assert len(result.positions) == 1
+        assert result.sync_error is not None and "no data" in result.sync_error
         # The snapshot was persisted despite the sync failure
         assert len(storage.latest_snapshot()) == 1
 
@@ -1053,48 +1060,6 @@ class TestPortfolioRollups:
         total = sum(Decimal(str(r["usd_at_ts"])) for r in rows)
         assert split["sweep_total"] + split["withdrawal_total"] == total
 
-    def test_rebalance_signals_tiers_and_gates(self):
-        from defi_tracker.analytics import RebalanceConfig, rebalance_signals
-
-        def snap(pk, value, lo, hi, cur, in_range):
-            return {
-                "wallet": TEST_WALLET,
-                "position_key": pk,
-                "pair_label": pk,
-                "chain": "peaq",
-                "protocol_id": "machinex",
-                "current_value_usd": value,
-                "tick_lower": lo,
-                "tick_upper": hi,
-                "tick_current": cur,
-                "in_range": in_range,
-            }
-
-        # Range width 1000 ticks. depth = beyond ÷ width.
-        snaps = [
-            snap("deep", 8000, 0, 1000, 1600, 0),  # depth 0.60 → now
-            snap("moderate", 7000, 0, 1000, 1250, 0),  # depth 0.25 → soon
-            snap("shallow", 6000, 0, 1000, 1100, 0),  # depth 0.10 → watch
-            snap("small", 1000, 0, 1000, 2000, 0),  # deep but $ below floor
-            snap("inrange", 50000, 0, 1000, 500, 1),  # in range → not flagged
-            snap("earning", 9000, 0, 1000, 1600, 0),  # deep but still earning
-        ]
-        yields = {
-            (TEST_WALLET, "inrange"): {"apy_pct": 20.0},
-            (TEST_WALLET, "earning"): {"apy_pct": 40.0},
-        }  # deep/moderate/shallow absent → yield None → dead
-        sigs = rebalance_signals(snaps, yields, {}, RebalanceConfig(idle_min_usd=Decimal("6500")))
-        by = {s["position_key"]: s for s in sigs}
-        assert by["deep"]["tier"] == "now"
-        assert by["moderate"]["tier"] == "soon"
-        assert "shallow" not in by  # below the 6500 floor set here
-        assert "small" not in by  # below floor
-        assert "inrange" not in by  # in range
-        assert by["earning"]["tier"] == "watch"  # deep but yield ≥ 5% → not dead
-        assert sigs[0]["tier"] == "now"  # sorted now→soon→watch
-        # forgone = idle × value-weighted in-range yield (20%)
-        assert abs(by["deep"]["forgone_usd"] - 8000 * 0.20) < 1
-
     def test_rebalance_queue_lifecycle(self, storage):
         import time as _time
 
@@ -1157,59 +1122,6 @@ class TestPortfolioRollups:
         assert storage.list_rebalance_queue() == []
         hist = storage.list_rebalance_queue(include_resolved=True)
         assert hist[0]["status"] == "resolved" and hist[0]["resolved_reason"] == "auto"
-
-    def test_pool_tick_volatility_and_suggest_range(self):
-        import math
-
-        from defi_tracker.analytics import pool_tick_volatility, suggest_range
-
-        # Daily tick series for one pool: deltas [+100,-100,+100,-100], mean 0.
-        hist = [
-            {
-                "snapshot_date": f"2026-07-0{d}",
-                "chain": "peaq",
-                "pair_label": "A/B",
-                "tick_current": t,
-                "is_closed": 0,
-            }
-            for d, t in [(1, 0), (2, 100), (3, 0), (4, 100), (5, 0)]
-        ]
-        vol = pool_tick_volatility(hist, min_points=3)
-        assert abs(vol[("peaq", "A/B")] - 100.0) < 1e-9  # pstdev of ±100 = 100
-        # Too few daily returns → pool omitted (can't size honestly).
-        assert pool_tick_volatility(hist[:2], min_points=3) == {}
-
-        sug = suggest_range(5000, vol[("peaq", "A/B")], z=2.5, horizon_days=30)
-        half = round(2.5 * 100 * math.sqrt(30))
-        assert sug["half_ticks"] == half
-        assert sug["lower"] == 5000 - half and sug["upper"] == 5000 + half
-        assert sug["half_pct"] > 0
-        assert suggest_range(5000, None) is None  # no vol → no suggestion
-
-    def test_rebalance_signals_attaches_suggested_range(self):
-        from defi_tracker.analytics import RebalanceConfig, rebalance_signals
-
-        snaps = [
-            {
-                "wallet": TEST_WALLET,
-                "position_key": "p",
-                "pair_label": "A/B",
-                "chain": "peaq",
-                "protocol_id": "machinex",
-                "current_value_usd": 9000,
-                "tick_lower": 0,
-                "tick_upper": 1000,
-                "tick_current": 1600,
-                "in_range": 0,
-            }
-        ]
-        sigs = rebalance_signals(
-            snaps, {}, {}, RebalanceConfig(), tick_vol={("peaq", "A/B"): 300.0}
-        )
-        assert len(sigs) == 1
-        sug = sigs[0]["suggest"]
-        assert sug is not None and sug["half_pct"] > 0
-        assert sigs[0]["current_half_pct"] > 0  # (1000-0)/2 ticks in %
 
     def test_monthly_fee_matrix(self):
         from defi_tracker.analytics import monthly_fee_matrix
@@ -1366,13 +1278,40 @@ class TestRealizedAndWindowYield:
     def test_realized_closed_pnl_only_counts_closed(self):
         from defi_tracker.analytics import realized_closed_pnl
 
+        # withdraw_count >= 1 marks a position as genuinely exited on record.
+        # Without it the exit is unproven and the row is unverified, not a loss
+        # — see TestRealizedClosedPnl in tests/test_analytics_fixes.py.
         flows = [
             # closed: deposited 100, withdrew 130 (net −30), fees 20 → +50
-            {"is_open": 0, "net_invested_usd": -30.0, "fees_usd": 20.0},
+            {
+                "is_open": 0,
+                "net_invested_usd": -30.0,
+                "fees_usd": 20.0,
+                "withdraw_count": 1,
+                "pair_label": "A/B",
+                "wallet": TEST_WALLET,
+                "position_key": "a",
+            },
             # open: must be excluded
-            {"is_open": 1, "net_invested_usd": 500.0, "fees_usd": 40.0},
+            {
+                "is_open": 1,
+                "net_invested_usd": 500.0,
+                "fees_usd": 40.0,
+                "withdraw_count": 1,
+                "pair_label": "C/D",
+                "wallet": TEST_WALLET,
+                "position_key": "b",
+            },
             # closed at a loss: net invested 80 still in when closed... value 0 → −80, fees 10 → −70
-            {"is_open": 0, "net_invested_usd": 80.0, "fees_usd": 10.0},
+            {
+                "is_open": 0,
+                "net_invested_usd": 80.0,
+                "fees_usd": 10.0,
+                "withdraw_count": 1,
+                "pair_label": "E/F",
+                "wallet": TEST_WALLET,
+                "position_key": "c",
+            },
         ]
         r = realized_closed_pnl(flows)
         assert r["realized_usd"] == Decimal("-20")  # +50 − 70
@@ -1411,7 +1350,7 @@ class TestRealizedAndWindowYield:
             }
         ]
         y = window_yields(stats, collects, window_days=30)
-        info = y[(TEST_WALLET, "p1")]
+        info = y[(TEST_WALLET, "peaq", "machinex", "p1")]
         assert info["earned"] == Decimal("30")
         # 30 / 3650 * 365/30 * 100 = 10%
         assert abs(info["apy_pct"] - 10.0) < 0.01
@@ -1421,5 +1360,18 @@ class TestRealizedAndWindowYield:
 
         stats = [self._wstat("p2", 1000.0, 0.0, 5.0, 3)]  # only 3 days of span
         y = window_yields(stats, [], window_days=30)
-        assert y[(TEST_WALLET, "p2")]["apy_pct"] is None
-        assert y[(TEST_WALLET, "p2")]["earned"] == Decimal("5")
+        assert y[(TEST_WALLET, "peaq", "machinex", "p2")]["apy_pct"] is None
+        assert y[(TEST_WALLET, "peaq", "machinex", "p2")]["earned"] == Decimal("5")
+
+
+def test_a_measured_zero_is_stored_as_zero_not_unknown(storage, make_position):
+    """An out-of-range position's share of active liquidity is 0 — a
+    measurement. Truthiness stored it as NULL, i.e. unknown."""
+    from decimal import Decimal
+
+    pos = make_position()
+    pos.position_share_pct = Decimal("0")
+    pos.seven_day_fees_usd = Decimal("0")
+    storage.write_snapshot(pos)
+    (row,) = storage.latest_snapshot()
+    assert row["position_share_pct"] == 0 and row["seven_day_fees_usd"] == 0

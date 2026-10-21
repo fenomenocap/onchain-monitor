@@ -86,8 +86,6 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # Tests can use assert, magic values, hardcoded "credentials" (test wallets)
 "tests/**/*.py" = ["S101", "S105", "S106", "S107"]
-# CLI prints — argparse is the standard pattern
-"defi_tracker/cli/**/*.py" = ["T201"]
 
 [tool.ruff.format]
 quote-style                = "double"
@@ -104,6 +102,7 @@ warn_unused_ignores     = true
 warn_return_any         = true
 warn_unreachable        = true
 disallow_untyped_defs   = false  # incremental adoption; tighten later
+check_untyped_defs      = true   # bodies of unannotated functions are still checked
 ignore_missing_imports  = true   # third-party libs without stubs
 
 [[tool.mypy.overrides]]

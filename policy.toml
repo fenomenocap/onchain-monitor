@@ -1,0 +1,36 @@
+# Mandate policy limits — what the book is reported against.
+#
+# Every limit is UNSET until leadership agrees a number (mandate Appendix A:
+# "Proposed concentration caps, as absolute figures and percentages").
+# An unset limit is reported as NOT SET, never as passing. Uncomment a line
+# and give it a value to start enforcing it; `defi-tracker limits` shows the
+# result. Unknown keys are rejected, so a typo cannot silently disable a limit.
+#
+# '%' limits are a share of the tracked DEX book until custody (Phase 3)
+# makes the whole balance sheet visible.
+
+[concentration]
+# max_position_pct = 20      # largest single position, % of book
+# max_position_usd = 250000  # largest single position, USD
+# max_pair_pct     = 35      # one pair across all fee tiers, % of book
+# max_pair_usd     = 400000
+# max_venue_pct    = 80      # one protocol on one chain, % of book
+# max_venue_usd    = 900000
+# max_chain_pct    = 80
+# max_chain_usd    = 900000
+
+[counterparty]
+# Exposures come from the contractual ledger (`defi-tracker ledger`).
+# max_exposure_pct = 25
+# max_exposure_usd = 500000
+# caps = { "Alpha MM" = 500000, "Beta MM" = 500000 }   # per-counterparty overrides, USD
+
+[risk]
+# max_il_pct           = 25  # IL vs HODL, any one position, % loss
+# max_out_of_range_pct = 30  # idle out-of-range capital, % of book
+
+[depeg]
+# The book values stablecoins at exactly $1.00, so the trigger reads an
+# independent market price (CoinGecko) for each coin listed here.
+# max_deviation_bps = 100
+# coins = { USDC = "usd-coin", USDT = "tether" }

@@ -149,8 +149,16 @@ class Position:
     fee_tier_bps: int | None = None  # 500 = 0.05%, etc.
 
     # ── Unclaimed value (fees for AMMs, accrued interest for lending) ──
-    unclaimed_usd: Decimal = Decimal("0")
+    # None means UNREADABLE, not zero — the fee-growth read failed. Reporting
+    # that as $0 understates unclaimed fees and every yield derived from them,
+    # so the two are kept apart all the way to the report, which shows "—" and
+    # excludes the position from the total rather than counting it as nothing.
+    unclaimed_usd: Decimal | None = Decimal("0")
     unclaimed_balances: list[TokenAmount] = field(default_factory=list)
+
+    @property
+    def unclaimed_known(self) -> bool:
+        return self.unclaimed_usd is not None
 
     # ── Pool/market context (for APR math, alerts) ──
     pool_tvl_usd: Decimal | None = None
@@ -216,6 +224,59 @@ class Event:
         return f"{self.tx_hash}:{self.log_index}"
 
 
+@dataclass(frozen=True)
+class Transfer:
+    """Custody-side movement of an asset between two references — a vault, an
+    address, or something outside the perimeter. Follows the `Event`
+    discipline: immutable, USD at transfer time, idempotent by a stable uid.
+
+    `chain` is a plain string, not `Chain`: custody spans networks and
+    off-chain venues the position tracker does not model. When it names a
+    tracked chain and `tx_hash` is set, the pair is the join key to `events` —
+    a vault→LP deposit appears in both, and must be netted on it, not summed.
+
+    Direction lives in from_ref → to_ref; `amount` is always positive. Whether
+    a transfer is internal or capital crossing the perimeter is NOT stored: it
+    is a classification over these rows (Phase 3.4), config-driven and
+    recomputable, so a wrong rule never corrupts an immutable record.
+    """
+
+    source: str  # 'fireblocks' | 'manual'
+    source_id: str  # the source's own stable id for this transfer
+    ts: int  # unix seconds
+    asset: str  # symbol or the source's asset id
+    amount: Decimal  # > 0
+    from_ref: str
+    to_ref: str
+    chain: str | None = None
+    tx_hash: str | None = None  # lowercased
+    token_key: str | None = None  # Token.key when the asset maps to one
+    usd_at_ts: Decimal | None = None  # None = unpriced, never zero
+    meta: dict = field(default_factory=dict)
+
+    @property
+    def transfer_uid(self) -> str:
+        return f"{self.source}:{self.source_id}"
+
+
+@dataclass(frozen=True)
+class VaultBalance:
+    """One observed custody balance: this much of `asset` in `vault_id` at
+    `ts`. Append-only, like marks — a balance is an observation at a moment,
+    and the history of them is what a reconciliation reads."""
+
+    vault_id: str
+    asset: str
+    amount: Decimal
+    ts: int
+    source: str = "fireblocks"
+    price_usd: Decimal | None = None  # None = unpriced
+
+    @property
+    def usd_value(self) -> Decimal | None:
+        return self.amount * self.price_usd if self.price_usd is not None else None
+
+
 @dataclass
 class Alert:
     """A signal worth surfacing to the user (Slack, terminal, etc.)."""
@@ -226,11 +287,6 @@ class Alert:
     message: str
     triggered_at: int  # unix seconds
     context: dict = field(default_factory=dict)
-
-    @property
-    def dedup_key(self) -> str:
-        """For deduping alerts within a window."""
-        return f"{self.position_uid}:{self.kind}"
 
 
 # ── Adapter capability descriptor ──────────────────────────────────────────
@@ -249,3 +305,47 @@ class AdapterInfo:
     protocol_kind: ProtocolKind
     supports_exact_fees: bool  # True for V3/V4-style, False for estimate-only
     supports_historical: bool  # True if it can backfill events
+
+
+@dataclass(frozen=True)
+class PoolInfo:
+    """A CL pool's identity for reading its swaps: tokens, decimals, fee."""
+
+    chain: str
+    pool: str  # lowercased address
+    token0: str
+    token1: str
+    symbol0: str
+    symbol1: str
+    dec0: int
+    dec1: int
+    fee_ppm: int  # 10000 = 1.00%
+
+
+@dataclass(frozen=True)
+class PoolSwap:
+    """One swap as the pool saw it, in pool-native units — the raw material
+    for measuring how a pool's flow responds to its depth (Phase 5.3)."""
+
+    pool: str
+    block: int
+    log_index: int
+    ts: int  # unix seconds; interpolated within its scan window where logs omit it
+    tick: int  # the pool's tick after the swap
+    liquidity: int  # the pool's active liquidity at the swap, raw
+    amount0: int  # signed pool delta, raw: positive = paid into the pool
+    amount1: int
+
+
+@dataclass(frozen=True)
+class PoolState:
+    """A CL pool's fee counter, depth and price at one block, raw units —
+    where Swap logs cannot be read, two of these a day apart give the day's
+    LP fees (Δ feeGrowthGlobal × active liquidity)."""
+
+    block: int
+    fee_growth0: int  # feeGrowthGlobal0X128
+    fee_growth1: int
+    liquidity: int  # active liquidity
+    sqrt_price_x96: int  # 0 = the pool was not yet initialised
+    tick: int

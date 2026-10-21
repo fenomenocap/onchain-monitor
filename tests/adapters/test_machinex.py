@@ -7,6 +7,7 @@ All RPC calls are mocked; no network traffic.
 from __future__ import annotations
 
 import contextlib
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -20,10 +21,15 @@ from defi_tracker.adapters.machinex import (
     MachineXAdapter,
 )
 from defi_tracker.core.storage import Storage
-from defi_tracker.core.types import Chain
+from defi_tracker.core.types import Chain, Token
 
 TEST_WALLET = "0xabc123def456abc123def456abc123def456abc1"
 FAKE_BLOCK = 7_000_000
+
+
+def _fake_token(_self, chain: Chain, address: str) -> Token:
+    """Bypass the registry/ERC20 read — these tests are about position logic."""
+    return Token(chain, address.lower(), address[2:6].upper(), 18)
 
 
 @pytest.fixture
@@ -98,24 +104,78 @@ def test_fetch_events_cursor_resumes_from_saved_position(
         captured_from.append(from_block)
         return []
 
+    with _one_position_scan(adapter, fake_get_logs_chunked):
+        adapter.fetch_events(TEST_WALLET, Chain.PEAQ, since_ts=0)
+
+    # The scan begins where the cursor left off, and banks progress past it.
+    assert captured_from and min(captured_from) == saved_block
+    cursor = storage.kv_get(f"block_cursor:{TEST_WALLET.lower()}:peaq")
+    assert int(cursor) > saved_block
+
+
+def test_unreadable_positions_hold_the_cursor(adapter: MachineXAdapter, storage: Storage):
+    """balanceOf says the wallet owns positions but none can be read: that is an
+    RPC failure, not an empty wallet.
+
+    Skipping the cursor forward here would step past a block range nobody
+    scanned, and the cursor never goes back — the events in it would be lost
+    permanently while the sync reported itself caught up.
+    """
+    saved_block = 6_000_000
+    storage.kv_set(f"block_cursor:{TEST_WALLET.lower()}:peaq", str(saved_block))
+
     with (
-        patch(
-            "defi_tracker.adapters.machinex.rpc_enumerate_positions_v3",
-            return_value=[1],
-        ),
-        patch(
-            "defi_tracker.adapters.machinex.rpc_get_position_v3",
-            return_value=None,
-        ),
+        patch("defi_tracker.adapters.machinex.rpc_enumerate_positions_v3", return_value=[1]),
+        patch("defi_tracker.adapters.machinex.rpc_get_position_v3", return_value=None),
         patch.object(adapter._rpc, "get_block_number", return_value=FAKE_BLOCK),
-        patch.object(adapter._rpc, "get_logs_chunked", side_effect=fake_get_logs_chunked),
     ):
         adapter.fetch_events(TEST_WALLET, Chain.PEAQ, since_ts=0)
 
-    # get_logs_chunked shouldn't be called (rpc_get_position_v3 returned None → tid_meta empty)
-    # but cursor should still advance from saved_block
-    cursor = storage.kv_get(f"block_cursor:{TEST_WALLET.lower()}:peaq")
-    assert int(cursor) > saved_block
+    assert int(storage.kv_get(f"block_cursor:{TEST_WALLET.lower()}:peaq")) == saved_block
+    assert adapter.last_scan_reached_head(TEST_WALLET, Chain.PEAQ) is False
+
+
+def test_one_unreadable_position_among_several_holds_the_cursor(
+    adapter: MachineXAdapter, storage: Storage
+):
+    """Token 2 reads, token 1 does not: scanning on would step past token 1's
+    events for good, so the cursor stays put."""
+    saved_block = 6_000_000
+    storage.kv_set(f"block_cursor:{TEST_WALLET.lower()}:peaq", str(saved_block))
+    ok = ("0x" + "aa" * 20, "0x" + "bb" * 20, 3000, -60, 60, 1, 0, 0)
+
+    with (
+        patch("defi_tracker.adapters.machinex.rpc_enumerate_positions_v3", return_value=[1, 2]),
+        patch(
+            "defi_tracker.adapters.machinex.rpc_get_position_v3",
+            side_effect=lambda rpc, nft, tid, **kw: ok if tid == 2 else None,
+        ),
+        patch("defi_tracker.adapters.machinex.rpc_get_pool_address_v3", return_value="0xpool"),
+        patch.object(adapter._rpc, "get_block_number", return_value=FAKE_BLOCK),
+    ):
+        adapter.fetch_events(TEST_WALLET, Chain.PEAQ, since_ts=0)
+
+    assert int(storage.kv_get(f"block_cursor:{TEST_WALLET.lower()}:peaq")) == saved_block
+
+
+def test_enumeration_failure_holds_the_cursor(adapter: MachineXAdapter, storage: Storage):
+    """RpcClient.eth_call swallows transport errors into None, so a flaky RPC
+    used to be indistinguishable from 'wallet holds nothing' — and that answer
+    walks the cursor forward 150k blocks without scanning."""
+    saved_block = 6_000_000
+    storage.kv_set(f"block_cursor:{TEST_WALLET.lower()}:peaq", str(saved_block))
+
+    with (
+        patch(
+            "defi_tracker.adapters.machinex.rpc_enumerate_positions_v3",
+            side_effect=RuntimeError("balanceOf failed — RPC unavailable"),
+        ),
+        patch.object(adapter._rpc, "get_block_number", return_value=FAKE_BLOCK),
+    ):
+        adapter.fetch_events(TEST_WALLET, Chain.PEAQ, since_ts=0)
+
+    assert int(storage.kv_get(f"block_cursor:{TEST_WALLET.lower()}:peaq")) == saved_block
+    assert adapter.last_scan_reached_head(TEST_WALLET, Chain.PEAQ) is False
 
 
 # ── Windowed batch generator tests ──────────────────────────────────────────
@@ -461,13 +521,127 @@ def test_fetch_positions_queries_subgraph(adapter: MachineXAdapter):
     assert result == []
 
 
-def test_fetch_positions_raises_on_subgraph_failure(adapter: MachineXAdapter):
-    """Subgraph outage raises — a silent [] would tombstone the portfolio."""
+def test_fetch_positions_falls_back_to_rpc_on_subgraph_failure(adapter: MachineXAdapter):
+    """Subgraph outage rebuilds from the chain rather than raising."""
     with (
         patch.object(adapter, "_run_subgraph_query", return_value=None),
-        pytest.raises(RuntimeError, match="no data"),
+        patch.object(adapter, "_fetch_positions_rpc", return_value=["sentinel"]) as fb,
     ):
-        adapter.fetch_positions(TEST_WALLET, Chain.PEAQ)
+        assert adapter.fetch_positions(TEST_WALLET, Chain.PEAQ) == ["sentinel"]
+    fb.assert_called_once_with(TEST_WALLET, Chain.PEAQ)
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        # A row the builder chokes on: dropping it would tombstone a live position.
+        {"clPositions": [{"id": "7", "liquidity": "5", "tickLower": {"tickIdx": "x"}}]},
+        # A full page: open positions may sit past the cut.
+        {"clPositions": [{"id": str(i), "liquidity": "0"} for i in range(1000)]},
+    ],
+)
+def test_an_unusable_subgraph_answer_rebuilds_from_rpc(adapter: MachineXAdapter, data):
+    with (
+        patch.object(adapter, "_run_subgraph_query", return_value=data),
+        patch.object(adapter, "_fetch_positions_rpc", return_value=["sentinel"]) as fb,
+    ):
+        assert adapter.fetch_positions(TEST_WALLET, Chain.PEAQ) == ["sentinel"]
+    fb.assert_called_once()
+
+
+def test_fetch_positions_raises_when_outage_leaves_no_way_to_look(storage: Storage, tmp_path: Path):
+    """No subgraph AND no RPC: raise. Reporting an empty book here would
+    tombstone every open position on a pure infrastructure failure."""
+    a = MachineXAdapter(graph_api_key="test-api-key", rpc_url="", db_path=str(tmp_path / "t.db"))
+    a._storage = storage
+    with (
+        patch.object(a, "_run_subgraph_query", return_value=None),
+        pytest.raises(RuntimeError, match="refusing to report an empty book"),
+    ):
+        a.fetch_positions(TEST_WALLET, Chain.PEAQ)
+
+
+def test_rpc_fallback_skips_zero_liquidity_but_keeps_live_positions(adapter: MachineXAdapter):
+    """An exited NFT stays enumerable with liquidity 0 — it must drop out (a
+    correct tombstone) without taking the live siblings with it."""
+    live = (
+        "0x" + "a1" * 20,
+        "0x" + "b2" * 20,
+        100,
+        -1000,
+        1000,
+        10**18,
+        0,
+        0,
+    )
+    exited = (live[0], live[1], 100, -1000, 1000, 0, 0, 0)
+
+    def fake_position(_rpc, _mgr, token_id, **_kw):
+        return exited if token_id == 2 else live
+
+    with (
+        patch("defi_tracker.adapters.machinex.rpc_enumerate_positions_v3", return_value=[1, 2]),
+        patch("defi_tracker.adapters.machinex.rpc_get_position_v3", side_effect=fake_position),
+        patch(
+            "defi_tracker.adapters.machinex.rpc_get_pool_address_v3",
+            return_value="0x" + "cc" * 20,
+        ),
+        patch(
+            "defi_tracker.adapters.machinex.rpc_get_slot0_v3",
+            return_value=(2**96, 0),
+        ),
+        patch.object(adapter, "_token_rpc", side_effect=_fake_token),
+        patch.object(adapter, "_prices_rpc", return_value=(Decimal("1"), Decimal("1"))),
+        patch(
+            "defi_tracker.adapters.machinex.compute_unclaimed_fees_v3",
+            return_value=(Decimal("0"), Decimal("0"), Decimal("0")),
+        ),
+        patch.object(adapter, "_legacy_positions_rpc", return_value=[]),
+    ):
+        positions = adapter._fetch_positions_rpc(TEST_WALLET, Chain.PEAQ)
+
+    assert [p.meta["token_id"] for p in positions] == [1]
+    assert positions[0].meta["source"] == "rpc_fallback"
+
+
+def test_rpc_fallback_raises_when_a_held_position_is_unreadable(adapter: MachineXAdapter):
+    """A partial list would tombstone whatever it left out — the exact silent
+    loss this path exists to avoid."""
+    with (
+        patch("defi_tracker.adapters.machinex.rpc_enumerate_positions_v3", return_value=[7]),
+        patch("defi_tracker.adapters.machinex.rpc_get_position_v3", return_value=None),
+        pytest.raises(RuntimeError, match="unreadable"),
+    ):
+        adapter._fetch_positions_rpc(TEST_WALLET, Chain.PEAQ)
+
+
+def test_rpc_fallback_refuses_to_undervalue_an_unpriceable_position(adapter: MachineXAdapter):
+    """Both legs unpriced and no pool ratio to lean on: raise rather than book
+    the position at zero."""
+    tok0 = _fake_token(None, Chain.PEAQ, "0x" + "a1" * 20)
+    tok1 = _fake_token(None, Chain.PEAQ, "0x" + "b2" * 20)
+    with (
+        patch.object(adapter, "_price_or_zero", return_value=Decimal("0")),
+        pytest.raises(RuntimeError, match="cannot price"),
+    ):
+        adapter._prices_rpc(tok0, tok1, sqrt_price_x96=0)
+
+
+def test_rpc_fallback_derives_the_unpriced_leg_from_the_pool(adapter: MachineXAdapter):
+    """The subgraph is the usual source of prices for the long tail of peaq
+    tokens, so losing it must not blank them: one known leg plus the pool's
+    own sqrtPrice prices the other."""
+    tok0 = _fake_token(None, Chain.PEAQ, "0x" + "a1" * 20)  # 18 decimals
+    tok1 = _fake_token(None, Chain.PEAQ, "0x" + "b2" * 20)
+
+    def price(token):
+        return Decimal("2") if token.address == tok1.address else Decimal("0")
+
+    with patch.object(adapter, "_price_or_zero", side_effect=price):
+        # sqrtPriceX96 == 2**96 is a 1:1 raw ratio, equal decimals → 1 t1 per t0.
+        p0, p1 = adapter._prices_rpc(tok0, tok1, sqrt_price_x96=2**96)
+    assert p0 == Decimal("2")
+    assert p1 == Decimal("2")
 
 
 # ── wrong chain ──────────────────────────────────────────────────────────────
@@ -808,3 +982,70 @@ def test_cl_position_falls_back_to_subgraph_fee_math_without_rpc(adapter: Machin
     assert built is not None
     mock_rpc_fees.assert_not_called()  # subgraph-pure path used
     assert built.unclaimed_usd == Decimal("0")  # zero fee growth → zero unclaimed
+
+
+# ── Dropped-event accounting through the real scan path ────────────────────
+
+
+def test_unpriceable_event_is_counted_as_dropped(adapter, storage):
+    """No price means the event never reaches the ledger, and the cursor moves
+    past it — the exact shape of the 49 peaq events lost in July 2026."""
+    adapter._begin_event_scan(TEST_WALLET, Chain.PEAQ)
+    # _run_scan_window seeds prices; drive _scan_window directly WITHOUT them.
+    from defi_tracker.core.types import Token
+
+    t0 = Token(Chain.PEAQ, "0x" + "aa" * 20, "AAA", 18)
+    t1 = Token(Chain.PEAQ, "0x" + "bb" * 20, "BBB", 18)
+    tid_meta = {1: ("pool:lo:hi:1", t0, t1)}
+    logs = [_liq_log(TOPIC_INC, "0xaa", 1, 10, 5, 5, 0)]
+
+    with (
+        patch("time.sleep"),
+        patch.object(adapter._rpc, "get_logs_chunked", return_value=logs),
+        patch.object(adapter._rpc, "get_block_timestamp", return_value=FAKE_NET_TS),
+    ):
+        events = adapter._scan_window(
+            TEST_WALLET, Chain.PEAQ, tid_meta, ["0x" + (1).to_bytes(32, "big").hex()], 100, 200
+        )
+
+    assert events == []
+    assert adapter.last_scan_dropped_events(TEST_WALLET, Chain.PEAQ) == 1
+
+
+def test_log_for_an_unknown_tokenid_is_counted(adapter, storage):
+    """The tripwire for the topic filter and tid_meta drifting apart: a log we
+    asked for, paid for, and cannot describe. Silently discarding it is how a
+    widened filter would look like it was working."""
+    adapter._begin_event_scan(TEST_WALLET, Chain.PEAQ)
+    from defi_tracker.core.types import Token
+
+    t0 = Token(Chain.PEAQ, "0x" + "aa" * 20, "AAA", 18)
+    t1 = Token(Chain.PEAQ, "0x" + "bb" * 20, "BBB", 18)
+    tid_meta = {1: ("pool:lo:hi:1", t0, t1)}
+    logs = [_liq_log(TOPIC_INC, "0xaa", 999, 10, 5, 5, 0)]  # tid 999
+
+    with (
+        patch("time.sleep"),
+        patch.object(adapter._rpc, "get_logs_chunked", return_value=logs),
+        patch.object(adapter._rpc, "get_block_timestamp", return_value=FAKE_NET_TS),
+    ):
+        events = adapter._scan_window(
+            TEST_WALLET, Chain.PEAQ, tid_meta, ["0x" + (1).to_bytes(32, "big").hex()], 100, 200
+        )
+
+    assert events == []
+    assert adapter.last_scan_dropped_events(TEST_WALLET, Chain.PEAQ) == 1
+
+
+def test_a_clean_scan_drops_nothing(adapter, storage):
+    """The counter must stay at 0 on the happy path, or every report cries wolf."""
+    adapter._begin_event_scan(TEST_WALLET, Chain.PEAQ)
+    events = _run_scan_window(
+        adapter,
+        storage,
+        [],
+        [],
+        increase_logs=[_liq_log(TOPIC_INC, "0xaa", 1, 10, 5, 5, 0)],
+    )
+    assert len(events) == 1
+    assert adapter.last_scan_dropped_events(TEST_WALLET, Chain.PEAQ) == 0
