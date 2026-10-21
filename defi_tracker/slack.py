@@ -16,36 +16,21 @@ Portfolio report:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import requests
 
 from defi_tracker.core.storage import Storage
+from defi_tracker.report import (
+    YIELD_WINDOW_DAYS,
+    ReportData,
+    gather_report_data,
+    mtd_headline,
+)
 
 _log = logging.getLogger(__name__)
 
 _SEVERITY_EMOJI = {"high": "🚨", "medium": "⚠️", "low": "ℹ️"}
-
-# Trailing window for realized yield (accrual basis) in the report
-_YIELD_WINDOW_DAYS = 30
-
-
-@dataclass
-class ReportData:
-    """Everything the daily report renders — gathered once in push_report."""
-
-    snaps: list[dict]
-    mtd_rows: list[dict]
-    collect_rows: list[dict] = field(default_factory=list)
-    day_delta: tuple[float, float] | None = None
-    last_in_range: dict[str, str] = field(default_factory=dict)
-    price_today: dict = field(default_factory=dict)
-    flow_rows: list[dict] = field(default_factory=list)
-    window_stats: list[dict] = field(default_factory=list)
-    window_collects: list[dict] = field(default_factory=list)
-    tick_vol: dict = field(default_factory=dict)
-    snoozed_uids: set = field(default_factory=set)
 
 
 class SlackDelivery:
@@ -104,28 +89,9 @@ class SlackDelivery:
         fees to today's prices alongside their at-harvest value.
         Returns True on success.
         """
-        snaps = storage.latest_snapshot()
-        if not snaps:
+        data = gather_report_data(storage, price_today)
+        if data is None:
             return False
-
-        from defi_tracker.analytics import pool_tick_volatility
-
-        today = datetime.now(UTC).date()
-        window_start = today.fromordinal(today.toordinal() - _YIELD_WINDOW_DAYS).isoformat()
-        vol_start = today.fromordinal(today.toordinal() - 90)
-        data = ReportData(
-            snaps=snaps,
-            mtd_rows=storage.month_to_date_pnl(),
-            collect_rows=storage.monthly_collects(),
-            day_delta=storage.day_over_day_value(),
-            last_in_range=storage.last_in_range_dates(),
-            price_today=price_today or {},
-            flow_rows=storage.position_flows(),
-            window_stats=storage.position_window_stats(_YIELD_WINDOW_DAYS),
-            window_collects=storage.collects_since(window_start),
-            tick_vol=pool_tick_volatility(storage.snapshots_in_range(start_date=vol_start)),
-            snoozed_uids=storage.snoozed_rebalance_uids(),
-        )
 
         try:
             payload = self._build_report_payload(data)
@@ -145,27 +111,26 @@ class SlackDelivery:
         from defi_tracker.analytics import (
             attribute_fee_months,
             fee_valuation,
-            fees_earned_mtd,
-            monthly_fee_matrix,
+            health_warnings,
             pnl_decomposition,
+            position_id,
             realized_closed_pnl,
-            rebalance_signals,
             risk_summary,
             window_yields,
         )
 
         snaps = data.snaps
-        mtd_rows = data.mtd_rows
         # Fees by month is bucketed on fee-accrual month: a start-of-month sweep
         # is the prior month's fees, so the trend reads as fee generation.
         collect_rows = attribute_fee_months(data.collect_rows) if data.collect_rows else []
-        day_delta = data.day_delta
-        last_in_range = data.last_in_range
+        value_delta = data.value_delta
         price_today = data.price_today
         total_value = sum(r["current_value_usd"] for r in snaps)
-        total_mtd = sum(r["pnl_mtd_usd"] or 0 for r in mtd_rows) if mtd_rows else None
-        earned_mtd = float(fees_earned_mtd(mtd_rows)) if mtd_rows else None
-        total_fees_mtd = sum(r["fees_collected_mtd"] or 0 for r in mtd_rows) if mtd_rows else None
+        # MTD is period PnL with flows netted out, exactly as the page shows it.
+        mtd_head = mtd_headline(data.periods)
+        total_mtd = float(mtd_head["pnl"]) if mtd_head else None
+        earned_mtd = float(mtd_head["fees_earned"]) if mtd_head else None
+        total_fees_mtd = float(mtd_head["fees_collected"]) if mtd_head else None
         today = datetime.now(UTC).strftime("%b %-d")
 
         blocks: list[dict] = [
@@ -180,12 +145,22 @@ class SlackDelivery:
 
         # ── Pulse: what changed ───────────────────────────────────────────
         pulse: list[str] = []
-        if day_delta and day_delta[1]:
-            curr, prev = day_delta
-            dv = curr - prev
-            pulse.append(f"*Δ day* {self._fmt_k(dv)} ({dv / prev * 100:+.2f}%)")
+        if value_delta is not None and value_delta.pct is not None:
+            # Never "Δ day" unless the window really is a day — a chain that
+            # missed a pass makes the baseline older than yesterday, and the
+            # label has to move with it.
+            span = value_delta.span_days
+            head = "Δ day" if span == 1 else f"Δ {span}d"
+            pulse.append(f"*{head}* {self._fmt_k(value_delta.delta)} ({value_delta.pct:+.2f}%)")
+            if value_delta.excluded_positions:
+                pulse.append(f"_excl. {value_delta.excluded_positions} stale_")
         if total_mtd is not None:
-            pulse.append(f"*MTD PnL* {self._fmt_k(total_mtd)}")
+            cover = (
+                f" _(flows netted · {mtd_head['covered_pct']:.0f}% of book)_"
+                if mtd_head and mtd_head["covered_pct"] is not None
+                else ""
+            )
+            pulse.append(f"*MTD PnL* {self._fmt_k(total_mtd)}{cover}")
         if earned_mtd is not None and total_fees_mtd is not None:
             # earned = accrual (collected + Δunclaimed); collected = cash.
             # A harvest sweep makes these very different — show both.
@@ -202,10 +177,11 @@ class SlackDelivery:
         )
 
         # ── Drivers | Risk, side by side ──────────────────────────────────
-        d = pnl_decomposition(snaps)
+        d = pnl_decomposition(snaps, data.tx_cost_rows)
         r = risk_summary(snaps)
         closed = realized_closed_pnl(data.flow_rows)
         book_net = float(d["net"]) + float(closed["realized_usd"])
+        lp_vs_hodl = float(d["il"]) + float(d["fees_lifetime"]) + float(d["unclaimed"])
         drivers_field = (
             "*PnL drivers (lifetime)*\n"
             f"open · market  {self._fmt_k(float(d['market_move']))}\n"
@@ -214,7 +190,12 @@ class SlackDelivery:
             f"  ·  uncl {self._fmt_k(float(d['unclaimed']))}\n"
             f"closed · realized  {self._fmt_k(float(closed['realized_usd']))}"
             f" ({closed['positions']} pos)\n"
-            f"*= book net  {self._fmt_k(book_net)}*"
+            f"{self._cost_lines(d)}"
+            f"*= book net  {self._fmt_k(book_net)}*\n"
+            # The verdict on the strategy: market move is exposure you'd have
+            # had holding the tokens anyway, so it is an ALTERNATIVE to this
+            # number, not a component of it — never render it as "of which".
+            f"*LP vs holding  {self._fmt_k(lp_vs_hodl)}* _(open only)_"
         )
         risk_field = (
             "*Risk*\n"
@@ -233,119 +214,99 @@ class SlackDelivery:
             }
         )
 
-        # ── Fee trend: MoM at harvest vs held-to-today ────────────────────
-        if collect_rows:
+        # ── Fee trend: the shared fee table (analytics.fee_table) ─────────
+        table = data.fee_table
+        if collect_rows and table is not None:
             val = fee_valuation(collect_rows, price_today)
-            window = val["months"][-6:]
-            claim_series = [float(val["claim_by_month"].get(m, 0)) for m in window]
-            if claim_series:
-                spark = self._sparkline(
-                    [float(val["claim_by_month"].get(m, 0)) for m in val["months"][-12:]]
-                )
-                priced = val["priced"]
-                # Per-chain split: MachineX = peaq, PancakeSwap (Pancake) = bsc.
-                _, chains, cells = monthly_fee_matrix(collect_rows)
-                order = [c for c in ("peaq", "bsc") if c in chains] + [
-                    c for c in chains if c not in ("peaq", "bsc")
-                ]
-                clabel = {"peaq": "MachineX", "bsc": "Pancake"}
+            priced = val["priced"]
+            # The last six months that have a row, so trailing empty months
+            # never crowd real ones off the front, and a Slack section stays
+            # well under its 3000-char limit.
+            window = table.rows[-6:]
+            spark = self._sparkline([float(r.claimed) for r in table.rows[-12:]])
+            order = table.chains
+            clabel = {"peaq": "MachineX", "bsc": "Pancake", "base": "UniV3"}
 
-                def _fee_row(label, mvals, claimed, mtm):
-                    body = "".join(f"{(self._fmt_k(v) if v else '—'):>10}" for v in mvals)
-                    mtm_s = self._fmt_k(mtm) if priced else "—"
-                    return f"{label:<9}{body}{self._fmt_k(claimed):>10}{mtm_s:>9}"
+            def _cell(row, c) -> str:
+                if c in row.unknown:
+                    return "?"
+                v = float(row.cells.get(c, 0))
+                if not v:
+                    return "—"
+                return self._fmt_k(v) + ("+" if c in row.partial else "")
 
-                hdr = (
-                    f"{'month':<9}"
-                    + "".join(f"{clabel.get(c, c):>10}" for c in order)
-                    + f"{'claimed':>10}{'mtm':>9}"
-                )
-                rows_txt = [hdr]
-                for m in window:
-                    rows_txt.append(
-                        _fee_row(
-                            m,
-                            [float(cells.get((m, c), 0)) for c in order],
-                            float(val["claim_by_month"].get(m, 0)),
-                            float(val["today_by_month"].get(m, 0)),
-                        )
-                    )
-                # Current accrual month is still pre-sweep: show live unclaimed
-                # (fees earned since the last harvest) as MTD-so-far, marked *.
-                cur_month = datetime.now(UTC).strftime("%Y-%m")
-                pending_note = ""
-                if cur_month not in val["months"]:
-                    unc_by_chain: dict[str, float] = {}
-                    for sn in snaps:
-                        u = float(sn.get("unclaimed_usd") or 0)
-                        if u:
-                            unc_by_chain[sn["chain"]] = unc_by_chain.get(sn["chain"], 0.0) + u
-                    unc = sum(unc_by_chain.values())
-                    if unc > 0:
-                        rows_txt.append(
-                            _fee_row(
-                                cur_month + "*", [unc_by_chain.get(c, 0.0) for c in order], unc, unc
-                            )
-                        )
-                        pending_note = f"\n_* {cur_month} = unclaimed so far (accruing, pre-sweep)_"
-                # YTD + lifetime summary rows.
-                rows_txt.append("─" * len(hdr))
-                year = datetime.now(UTC).strftime("%Y")
-                ytd_m = [m for m in val["months"] if m.startswith(year)]
-                rows_txt.append(
-                    _fee_row(
-                        f"YTD {year}",
-                        [sum(float(cells.get((m, c), 0)) for m in ytd_m) for c in order],
-                        sum(float(val["claim_by_month"].get(m, 0)) for m in ytd_m),
-                        sum(float(val["today_by_month"].get(m, 0)) for m in ytd_m),
-                    )
-                )
-                rows_txt.append(
-                    _fee_row(
-                        "Lifetime",
-                        [sum(float(cells.get((m, c), 0)) for m in val["months"]) for c in order],
-                        float(val["claim_total"]),
-                        float(val["today_total"]),
-                    )
-                )
-                ct, td = float(val["claim_total"]), float(val["today_total"])
-                # One reconciled fee story: lifetime = closed + open portions,
-                # then the held-to-today haircut.
-                open_fees = float(d["fees_lifetime"])
-                closed_fees = float(closed["fees_usd"])
-                headline = f"💰 *Fees by month* _(accrual)_  `{spark}`\n"
-                if priced:
-                    headline += (
-                        f"lifetime *{self._fmt_k(ct)}* claimed "
-                        f"(open {self._fmt_k(open_fees)} + closed {self._fmt_k(closed_fees)})"
-                        f" · *{self._fmt_k(td)}* marked-to-market"
-                    )
-                    if val["by_token_drop"]:
-                        sym, tc, tt = val["by_token_drop"][0]
-                        if float(tc) > 0 and float(tc) - float(tt) > 1000:
-                            drop = (1 - float(tt) / float(tc)) * 100
-                            headline += (
-                                f"  ·  {sym} fees {self._fmt_k(float(tc))}→"
-                                f"{self._fmt_k(float(tt))} (−{drop:.0f}%)"
-                            )
+            def _line(row) -> str:
+                body = "".join(f"{_cell(row, c):>10}" for c in order)
+                if row.status == "unswept":
+                    tot, mtm = "unswept", "—"
+                elif row.status == "rolled":
+                    tot, mtm = "in later", "—"
                 else:
-                    headline += (
-                        f"lifetime *{self._fmt_k(ct)}* claimed "
-                        f"(open {self._fmt_k(open_fees)} + closed {self._fmt_k(closed_fees)})"
+                    tot = self._fmt_k(float(row.claimed)) + (
+                        "+" if row.partial or row.unknown else ""
                     )
-                blocks.append(
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": headline + "\n```" + "\n".join(rows_txt) + "```" + pending_note,
-                        },
-                    }
-                )
+                    mtm = self._fmt_k(float(row.mtm)) if priced and row.mtm is not None else "—"
+                mark = {"split": "§", "accruing": "*"}.get(row.status, "")
+                return f"{row.label[:8] + mark:<9}{body}{tot:>10}{mtm:>9}"
+
+            hdr = (
+                f"{'month':<9}"
+                + "".join(f"{clabel.get(c, c):>10}" for c in order)
+                + f"{'claimed':>10}{'mtm':>9}"
+            )
+            rows_txt = [hdr, *(_line(r) for r in window)]
+            if table.accruing:
+                rows_txt.append(_line(table.accruing))
+            rows_txt.append("─" * len(hdr))
+            rows_txt += [_line(table.ytd), _line(table.lifetime)]
+            pending_note = ""
+            if table.accruing:
+                pending_note += f"\n_* {table.accruing.note} — not yet claimed_"
+            for frow in window:
+                if frow.status in ("split", "rolled"):
+                    pending_note += f"\n_{frow.label}: {frow.note}_"
+            for n in table.notes:
+                pending_note += f"\n_? {n}_"
+
+            ct, td = float(val["claim_total"]), float(val["today_total"])
+            # One reconciled fee story: lifetime = closed + open portions.
+            # The closed share is the remainder; if it goes negative the two
+            # totals have diverged, so print lifetime alone rather than an
+            # equation that does not add up.
+            open_fees = float(d["fees_lifetime"])
+            closed_fees = ct - open_fees
+            reconciles = closed_fees >= 0
+            split_txt = (
+                f"(open {self._fmt_k(open_fees)} + closed {self._fmt_k(closed_fees)})"
+                if reconciles
+                else ""
+            )
+            floor = "+" if table.lifetime.partial else ""
+            headline = f"💰 *Fees by month* _(accrual)_  `{spark}`\n"
+            headline += f"lifetime *{self._fmt_k(ct)}{floor}* claimed " + split_txt
+            if priced:
+                headline += f" · *{self._fmt_k(td)}* marked-to-market"
+                if val["by_token_drop"]:
+                    sym, tc, tt = val["by_token_drop"][0]
+                    if float(tc) > 0 and float(tc) - float(tt) > 1000:
+                        drop = (1 - float(tt) / float(tc)) * 100
+                        headline += (
+                            f"  ·  {sym} fees {self._fmt_k(float(tc))}→"
+                            f"{self._fmt_k(float(tt))} (−{drop:.0f}%)"
+                        )
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": headline + "\n```" + "\n".join(rows_txt) + "```" + pending_note,
+                    },
+                }
+            )
 
         # ── What's earning: in-range positions with realized 30d yield ───
         yields = window_yields(
-            data.window_stats, data.window_collects, window_days=_YIELD_WINDOW_DAYS
+            data.window_stats, data.window_collects, window_days=YIELD_WINDOW_DAYS
         )
         earning = sorted(
             (row for row in snaps if row.get("in_range")),
@@ -356,7 +317,7 @@ class SlackDelivery:
             shown = earning[:8]
             lines = [f"{'Pair':<22} {'Value':>8} {'Range':>6} {'30d yld':>8}"]
             for row in shown:
-                y = yields.get((row["wallet"], row["position_key"]))
+                y = yields.get(position_id(row))
                 yld = f"{y['apy_pct']:.0f}%" if y and y["apy_pct"] is not None else "—"
                 lines.append(
                     f"{row['pair_label'][:22]:<22} "
@@ -375,35 +336,57 @@ class SlackDelivery:
                         "type": "mrkdwn",
                         "text": (
                             f"🟢 *Earning — {self._fmt_k(in_range_val)} in range* "
-                            f"_(30d yld = fees earned last {_YIELD_WINDOW_DAYS}d ÷ avg value, annualized)_\n"
+                            f"_(30d yld = fees earned last {YIELD_WINDOW_DAYS}d ÷ avg value, annualized)_\n"
                             "```" + "\n".join(lines) + "```"
                         ),
                     },
                 }
             )
 
-        # ── What needs action — economic rebalance signals ────────────────
-        signals = rebalance_signals(snaps, yields, last_in_range, tick_vol=data.tick_vol)
-        # Hide deferred (snoozed) items so they stop nagging until their timer lapses.
-        shown = [s for s in signals if s["uid"] not in data.snoozed_uids]
-        n_snoozed = sum(
-            1 for s in signals if s["uid"] in data.snoozed_uids and s["tier"] in ("now", "soon")
-        )
-        attention = self._attention_lines(shown)
-        if attention:
-            n_act = sum(1 for s in shown if s["tier"] in ("now", "soon"))
-            head = f"🚨 *Needs action ({n_act})*"
-            if n_snoozed:
-                head += f"  ·  _{n_snoozed} snoozed_"
+        # ── Action queue — EV-ranked trade tickets (Phase 5.2) ───────────
+        blocks.extend(self._ticket_blocks(data))
+
+        # ── Mandate: one line, the same state the page's Mandate section shows ──
+        m = data.mandate
+        if m:
+            checks = m.get("checks", [])
+            n_breach = sum(1 for c in checks if c.status == "breach")
+            n_unset = sum(1 for c in checks if c.status == "unset")
+            unreviewed = sum(1 for e in m.get("exceptions", []) if not e["reviewed_at"])
+            parts = [f"{n_breach} breach{'es' if n_breach != 1 else ''}"]
+            if unreviewed:
+                parts.append(f"{unreviewed} exception(s) unreviewed")
+            if n_unset:
+                parts.append(f"{n_unset} limit(s) not set")
+            if m.get("policy_error"):
+                parts = ["policy file INVALID — no limit evaluated"]
+            ends = [
+                (c["counterparty"], c["end_date"])
+                for c in m.get("contracts", [])
+                if c["status"] == "active" and c["end_date"]
+            ]
+            if ends:
+                name, end = min(ends, key=lambda e: e[1])
+                days = (datetime.fromisoformat(end).date() - datetime.now(UTC).date()).days
+                parts.append(f"next expiry {name} in {days}d")
+            elif not m.get("contracts"):
+                parts.append("ledger not keyed")
+            icon = "🚨" if n_breach or m.get("policy_error") else "📜"
             blocks.append(
                 {
                     "type": "section",
-                    "text": {"type": "mrkdwn", "text": head + "\n" + "\n".join(attention)},
+                    "text": {"type": "mrkdwn", "text": f"{icon} *Mandate* — " + " · ".join(parts)},
                 }
             )
 
         # ── Footnotes ─────────────────────────────────────────────────────
-        notes: list[str] = []
+        notes: list[str] = health_warnings(data.health_rows)
+        if closed["unverified_positions"]:
+            notes.append(
+                f"{closed['unverified_positions']} closed position(s) with no withdrawal on "
+                f"record ({self._fmt_k(float(closed['unverified_usd']))} deposited) are excluded "
+                "from realized PnL — missing data, not losses"
+            )
         stale = self._stale_chains(snaps)
         for chain, as_of, age_days in stale:
             notes.append(
@@ -446,28 +429,78 @@ class SlackDelivery:
                 out.append((chain, d, age))
         return out
 
-    _TIER_ICON = {"now": "🔴", "soon": "🟠", "watch": "🟡"}
+    def _ticket_blocks(self, data: ReportData) -> list[dict]:
+        """The action queue at a glance: one line per pool (per leg where a
+        pool has several) — action, NFT, deploy band vs spot, pool depth
+        change, EV, conviction. The full ticket (ticks, amounts, drivers,
+        the calculation) is on the desk, one link away."""
+        from defi_tracker.analytics import DESK_URL, GROUP_ORDER, GROUP_TITLES, money, plan_cards
 
-    def _attention_lines(self, signals: list[dict]) -> list[str]:
-        """Render rebalance signals (already tiered/sorted now→soon→watch) into
-        Slack lines: idle $, how far beyond the range, days out when known, and
-        the forgone-fee estimate — a decision, not a nag."""
-        lines: list[str] = []
-        for s in signals:
-            icon = self._TIER_ICON.get(s["tier"], "🟡")
-            bits = [f"{self._fmt_k(s['idle_usd'])} idle", f"{s['depth'] * 100:.0f}% past edge"]
-            if s.get("days_out"):
-                bits.append(f"out {s['days_out']}d")
-            if s.get("forgone_usd") and s["forgone_usd"] >= 1:
-                bits.append(f"~{self._fmt_k(s['forgone_usd'])}/yr forgone")
-            line = f"{icon} *{s['pair']}* — " + " · ".join(bits)
-            sug = s.get("suggest")
-            if sug:
-                line += (
-                    f"\n     ↳ retarget ±{sug['half_pct']:.0f}% (now ±{s['current_half_pct']:.0f}%)"
-                )
-            lines.append(line)
-        return lines
+        # An empty queue must never read as "nothing to do": say whether it
+        # was not computed, or which positions could not be scored.
+        q = data.actions
+        if q is None:
+            return [
+                {"type": "divider"},
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "*Action queue* · not computed this run"},
+                },
+            ]
+        cards = plan_cards(q, data.snoozed_uids)
+        shown = sum(len(c.steps) for c in cards)
+        n_snoozed = len(q.tickets) - shown
+        total = sum(c.total_usd for c in cards)
+        # No desk link configured (DESK_URL unset): the pointer stays, unlinked.
+        desk = f"<{DESK_URL}|full tickets on the desk>" if DESK_URL else "full tickets on the desk"
+        head = (
+            f"*Action queue* · {shown} tickets · EV {money(total, True)} / "
+            f"{q.horizon_days:.0f}d · propose-only · {desk}"
+        )
+        if n_snoozed:
+            head += f" · {n_snoozed} snoozed"
+        if q.unscored:
+            head += f" · {len(q.unscored)} position(s) not scored (unknown, not zero)"
+        from defi_tracker.analytics import backtest_verdict, ticket_why
+
+        verdict = backtest_verdict(data.backtest, {t.chain for t in q.tickets})
+        blocks: list[dict] = [
+            {"type": "divider"},
+            {"type": "section", "text": {"type": "mrkdwn", "text": head}},
+            {"type": "context", "elements": [{"type": "mrkdwn", "text": f"_{verdict}._"}]},
+        ]
+        if not cards:
+            return blocks
+
+        def leg(v) -> str:
+            parts = [f"{v.action} {v.ref}" + (f" → {v.width}" if v.width else "")]
+            dch = v.ticket.depth_change
+            if abs(dch) >= 0.05:
+                parts.append(f"depth {'+' if dch > 0 else '−'}{abs(dch):.0%}")
+            parts.append(f"{v.ev}")
+            parts.append(ticket_why(v.ticket, short=True))
+            parts.append(v.conviction.upper())
+            return " · ".join(parts)
+
+        for group in GROUP_ORDER:
+            group_cards = [c for c in cards if c.group == group]
+            if not group_cards:
+                continue
+            title, sub = GROUP_TITLES[group]
+            lines = [f"*{title}* _({sub})_"]
+            for c in group_cards:
+                if len(c.steps) == 1:
+                    lines.append(f"• *{c.pair}* · {c.venue} — {leg(c.steps[0])}")
+                else:
+                    lines.append(
+                        f"• *{c.pair}* · {c.venue} — {len(c.steps)} legs, EV "
+                        f"{money(c.total_usd, True)}"
+                    )
+                    lines += [f"      {k}. {leg(v)}" for k, v in enumerate(c.steps, 1)]
+            blocks.append(
+                {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)[:2990]}}
+            )
+        return blocks
 
     _SPARK_CHARS = "▁▂▃▄▅▆▇█"
 
@@ -486,10 +519,31 @@ class SlackDelivery:
     # ── Formatting helpers ────────────────────────────────────────────────
 
     @staticmethod
+    def _cost_lines(d: dict) -> str:
+        """Gas and slippage as their own lines above book net. Gas is already
+        paid; leaving it out of the drivers made the book look better than the
+        desk did. Partial coverage is stated inline — a gas total over 6 of 239
+        transactions is a floor, and reading it as a total is the error this
+        line exists to prevent."""
+        costs = d.get("costs")
+        if not costs or not costs["txs"]:
+            return ""
+        gas = "—" if costs["gas_usd"] is None else f"-${float(costs['gas_usd']):,.2f}"
+        cover = (
+            ""
+            if costs["gas_is_complete"] or not costs["txs"]
+            else f" _({costs['gas_known_txs']}/{costs['txs']} tx)_"
+        )
+        slip = "—" if costs["slippage_usd"] is None else f"-${float(costs['slippage_usd']):,.2f}"
+        return f"costs · gas  {gas}{cover}  ·  slippage  {slip}\n"
+
+    @staticmethod
     def _fmt_k(v) -> str:
-        """Format a USD value as compact $k notation: $136.6k, -$7.1k, $0.0k."""
+        """Format a USD value as compact $k notation: $12.3k, -$4.5k, $0."""
         if v is None:
             return "    —"
+        if not v:
+            return "$0"  # an exact zero is a fact, not a rounded $0.0k
         sign = "-" if v < 0 else ""
         return f"{sign}${abs(v) / 1000:.1f}k"
 

@@ -228,7 +228,7 @@ USDT_ADDR = "0x55d398326f99059ff775485246999027b3197955"
 USDC_ADDR = "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d"
 POOL_ID = "0x" + "ab" * 32
 FALLBACK_POSITION_KEY = f"{POOL_ID}:-100:100"
-TOKEN_ID = 737759
+TOKEN_ID = 700001
 LIVE_LIQUIDITY = 5 * 10**18
 SQRT_1_TO_1 = 79228162514264337593543950336  # 2^96 → tick 0, price 1:1
 
@@ -309,9 +309,12 @@ def test_fetch_positions_outage_falls_back_to_rpc(adapter_with_history):
     assert pos.meta["token_id"] == TOKEN_ID
     # 1:1 pool, both stablecoins at $1 → value > 0 without any network pricing
     assert pos.current_value_usd > 0
-    # pool context carried forward from the last snapshot
-    assert pos.pool_tvl_usd == Decimal("10000000")
-    assert pos.seven_day_fees_usd == Decimal("5000")
+    # Pool-wide context is left UNKNOWN, not carried forward from the last
+    # snapshot: re-emitting it every pass re-dates a stale figure to today, and
+    # seven_day_fees_usd drives NEGATIVE_CARRY, which would then compare
+    # current IL against a fee rate from before the outage.
+    assert pos.pool_tvl_usd is None
+    assert pos.seven_day_fees_usd is None
 
 
 def test_fetch_positions_outage_closed_position_is_omitted(adapter_with_history):
@@ -394,3 +397,19 @@ def test_adapter_info(adapter):
     assert info.protocol_id == "pancake_infinity"
     assert Chain.BSC in info.chains
     assert info.supports_exact_fees is True
+
+
+def test_unreadable_fee_state_raises_rather_than_reading_as_zero():
+    """A failed read is unknown, not "accrued nothing"."""
+    from unittest.mock import MagicMock
+
+    from defi_tracker.adapters._cl_math import compute_unclaimed_fees_rpc
+
+    rpc = MagicMock()
+    rpc.eth_call.return_value = None
+    with pytest.raises(RuntimeError, match="unreadable"):
+        compute_unclaimed_fees_rpc(
+            rpc, "0x" + "aa" * 20, "0x" + "bb" * 20, "0x" + "11" * 32, -100, 100, 0, 1, 10**18,
+            18, 18,
+            Decimal("1"), Decimal("1"),
+        )  # fmt: skip

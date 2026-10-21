@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "fireblocks-docs": {
+      "type": "http",
+      "url": "https://developers.fireblocks.com/mcp"
+    }
+  }
+}

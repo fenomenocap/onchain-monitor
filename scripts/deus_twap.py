@@ -3,7 +3,7 @@ Fetch daily DEUS prices from the MachineX subgraph and compute TWAP over an exac
 
 Usage:
     python scripts/deus_twap.py                                        # 14D rolling window
-    python scripts/deus_twap.py --start 2026-05-27 --end 2026-06-10   # exact campaign window
+    python scripts/deus_twap.py --start 2026-01-01 --end 2026-01-14   # an exact date window
 
 Requires GRAPH_API_KEY in .env (same key used by the main tracker).
 """
@@ -60,7 +60,10 @@ def fetch_daily_prices(api_key: str, token_address: str, start_ts: int, end_ts: 
         try:
             r = requests.post(url, json={"query": query}, timeout=30)
             if r.status_code in (401, 403):
-                print(f"ERROR: Subgraph auth failed (HTTP {r.status_code}) — check GRAPH_API_KEY", file=sys.stderr)
+                print(
+                    f"ERROR: Subgraph auth failed (HTTP {r.status_code}) — check GRAPH_API_KEY",
+                    file=sys.stderr,
+                )
                 sys.exit(1)
             r.raise_for_status()
             j = r.json()
@@ -104,13 +107,17 @@ def compute_twap(rows: list[dict]) -> Decimal:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compute DEUS TWAP from MachineX subgraph")
-    parser.add_argument("--start", default="2026-05-27", help="Start date inclusive, YYYY-MM-DD")
-    parser.add_argument("--end", default="2026-06-10", help="End date inclusive, YYYY-MM-DD")
-    parser.add_argument("--address", default=DEUS_ADDRESS, help="Token address (default: DEUS on peaq)")
+    parser.add_argument("--start", help="Start date inclusive, YYYY-MM-DD (default: end − 13d)")
+    parser.add_argument("--end", help="End date inclusive, YYYY-MM-DD (default: yesterday, UTC)")
+    parser.add_argument(
+        "--address", default=DEUS_ADDRESS, help="Token address (default: DEUS on peaq)"
+    )
     args = parser.parse_args()
 
-    start_date = date.fromisoformat(args.start)
-    end_date = date.fromisoformat(args.end)
+    end_date = (
+        date.fromisoformat(args.end) if args.end else datetime.now(UTC).date() - timedelta(days=1)
+    )
+    start_date = date.fromisoformat(args.start) if args.start else end_date - timedelta(days=13)
 
     if start_date > end_date:
         print("ERROR: --start must be before --end", file=sys.stderr)
@@ -125,11 +132,15 @@ def main() -> None:
     end_ts = _date_to_ts(end_date)
     n_days = (end_date - start_date).days + 1
 
-    print(f"Fetching {n_days}-day price history ({start_date} → {end_date}) from MachineX subgraph…")
+    print(
+        f"Fetching {n_days}-day price history ({start_date} → {end_date}) from MachineX subgraph…"
+    )
     rows = fetch_daily_prices(api_key, args.address, start_ts, end_ts)
 
     if not rows:
-        print("No tokenDayData returned — token may not exist in subgraph or has no trading history.")
+        print(
+            "No tokenDayData returned — token may not exist in subgraph or has no trading history."
+        )
         sys.exit(1)
 
     symbol = (rows[0].get("token") or {}).get("symbol") or "DEUS"
@@ -155,7 +166,9 @@ def main() -> None:
     print("-" * 30)
 
     if missing:
-        print(f"\n⚠  {len(missing)} day(s) missing from subgraph — TWAP computed over {len(rows)} available days.")
+        print(
+            f"\n⚠  {len(missing)} day(s) missing from subgraph — TWAP computed over {len(rows)} available days."
+        )
 
     try:
         twap = compute_twap(rows)

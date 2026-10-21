@@ -53,11 +53,34 @@ reports/
 # Ruff
 .ruff_cache/
 
-# Original reference (the script we're replacing)
-1779797386463_pancake_defi.py
 
 # Internal spreadsheets
 *.xlsx
 
 # Local Claude settings
 .claude/settings.local.json
+
+# Generated desk view
+dashboard.html
+
+# Internal MM agreements and contracts (operator-supplied, never committed).
+# Per-counterparty folders are excluded in .git/info/exclude, not here: their
+# names are themselves confidential.
+*.pdf
+
+# Internal desk content mirrored from the proposal doc (counterparty terms)
+content/
+# Source Word documents (internal)
+*.docx
+
+# Fireblocks API secret (never committed)
+*.key
+fireblocks*.csr
+
+# Incoming MM quotes (counterparty terms, never committed)
+RFQ/
+
+# Internal working docs (handoff notes, roadmap, proposals) — local only
+NEXT_SESSION.md
+ROADMAP.md
+peaq-liquidity-treasury-mandate-proposal.md

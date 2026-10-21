@@ -1,7 +1,8 @@
 # Protocol reference
 
-Contract addresses and data sources for planned adapters.
-Use these when implementing the stubs in `adapters/`.
+Contract addresses and data sources for adapters, implemented and planned.
+Uniswap V3 is implemented (`adapters/uniswap_v3.py`; registered for the chains
+in `UNISWAP_V3_CHAINS`); Aave V3 is planned — no adapter file exists yet.
 
 ## Uniswap V3
 

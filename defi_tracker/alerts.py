@@ -10,6 +10,9 @@ Signals:
   3. IL_THRESHOLD     IL% exceeded the user's tolerance
   4. NEGATIVE_CARRY   Fees < IL accrual rate
   5. STALE_POSITION   No events in 30+ days and out of range
+
+Portfolio-level (not per position):
+  POLICY_BREACH       A mandate limit is exceeded (see policy_breach_alerts)
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from defi_tracker.analytics import PnLBreakdown
+from defi_tracker.analytics import LimitCheck, PnLBreakdown
 from defi_tracker.core.types import Alert, AlertSeverity, Position, ProtocolKind
 
 
@@ -42,7 +45,7 @@ class AlertConfig:
     # mechanics (OUT_OF_RANGE, NEAR_EDGE) and the blunt IL_THRESHOLD are
     # retired from the push path — the daily report's "Needs action" carries
     # the graduated 🟠/🟡 tiers instead. Add kinds here to re-enable them.
-    push_kinds: frozenset[str] = frozenset({"REBALANCE", "NEGATIVE_CARRY"})
+    push_kinds: frozenset[str] = frozenset({"REBALANCE", "NEGATIVE_CARRY", "POLICY_BREACH"})
 
 
 # Default config singleton — avoids constructing in default argument (ruff B008).
@@ -207,3 +210,47 @@ def evaluate_alerts(
                 triggered_at=now,
                 context={"days_since_event": int(days_since_event), "transition": False},
             )
+
+
+def _fmt_observed(c: LimitCheck) -> str:
+    if c.observed is None:
+        return "unknown"
+    if c.unit == "USD":
+        return f"${c.observed:,.0f}"
+    return f"{c.observed:.1f}{c.unit}" if c.unit == "%" else f"{c.observed:.0f} {c.unit}"
+
+
+def policy_breach_alerts(
+    checks: list[LimitCheck], open_uids: set[str] | None = None, now: int | None = None
+) -> Iterator[Alert]:
+    """One POLICY_BREACH alert per (limit, subject) in breach.
+
+    `open_uids` are the breaches already known to be open (the exception
+    log's live episodes). A breach not among them is a transition and alerts
+    at once; one already open is a reminder, deduped on the long window. With
+    no state at all every breach is treated as a reminder, so a first run
+    cannot flood — the first occurrence still fires, since nothing is in the
+    dedup window yet."""
+    now = now if now is not None else int(datetime.now(UTC).timestamp())
+    for c in checks:
+        if c.status != "breach":
+            continue
+        threshold = _fmt_observed(LimitCheck(c.limit_id, c.subject, c.threshold, None, c.unit, ""))
+        yield Alert(
+            position_uid=c.uid,
+            kind="POLICY_BREACH",
+            severity=AlertSeverity.HIGH,
+            message=(
+                f"Policy breach — {c.limit_id}: {c.subject} at {_fmt_observed(c)} "
+                f"(limit {threshold})" + (f"; {c.note}" if c.note else "") + "."
+            ),
+            triggered_at=now,
+            context={
+                "limit_id": c.limit_id,
+                "subject": c.subject,
+                "observed": str(c.observed),
+                "threshold": str(c.threshold),
+                "unit": c.unit,
+                "transition": open_uids is not None and c.uid not in open_uids,
+            },
+        )

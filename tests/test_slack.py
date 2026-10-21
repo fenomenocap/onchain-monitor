@@ -12,8 +12,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from defi_tracker.core.storage import Storage
+from defi_tracker.core.storage import Storage, ValueDelta
 from defi_tracker.core.types import Alert, AlertSeverity
+from defi_tracker.report import ReportData
 from defi_tracker.slack import SlackDelivery
 
 WEBHOOK = "https://hooks.slack.com/services/FAKE/WEBHOOK"
@@ -114,3 +115,92 @@ def test_payload_contains_position_uid_and_message(storage: Storage):
     payload = mock_post.call_args.kwargs["json"]
     assert "IL_THRESHOLD" in payload["text"]
     assert "Test alert message" in payload["text"]
+
+
+# ── The pulse line's window ───────────────────────────────────────────────
+
+
+def _report(**over) -> ReportData:
+    snap = {
+        "snapshot_date": "2026-09-21",
+        "wallet": "0xabc123def456abc123def456abc123def456abc1",
+        "chain": "peaq",
+        "protocol_id": "machinex",
+        "position_key": "1001",
+        "pair_label": "WPEAQ/USDT 1.00%",
+        "current_value_usd": 10_000.0,
+        "unclaimed_usd": 250.0,
+        "unclaimed_is_known": 1,
+        "cost_basis_usd": 12_000.0,
+        "hold_value_usd": 11_000.0,
+        "il_usd": -1_000.0,
+        "il_pct": -9.1,
+        "pnl_usd": -1_750.0,
+        "in_range": 1,
+        "tick_lower": -10_000,
+        "tick_upper": 10_000,
+        "tick_current": 0,
+    }
+    kw = {"snaps": [snap]}
+    kw.update(over)
+    return ReportData(**kw)
+
+
+def _pulse(data: ReportData) -> str:
+    """Every piece of mrkdwn in the report, flattened — blocks carry text
+    either directly or in `fields`, and a test should not care which."""
+    payload = SlackDelivery(WEBHOOK)._build_report_payload(data)  # noqa: SLF001
+    out = []
+    for b in payload["blocks"]:
+        if b.get("text", {}).get("type") == "mrkdwn":
+            out.append(b["text"]["text"])
+        for f in b.get("fields", []):
+            out.append(f.get("text", ""))
+    return "\n".join(out)
+
+
+def test_slack_says_delta_day_only_when_the_window_is_a_day():
+    text = _pulse(_report(value_delta=ValueDelta(110_000.0, 100_000.0, "2026-09-21", "2026-09-20")))
+    assert "*Δ day*" in text
+
+
+def test_slack_names_the_real_span_when_a_pass_was_missed():
+    """The label this item exists to fix: three days of movement called 'Δ day'."""
+    text = _pulse(_report(value_delta=ValueDelta(110_000.0, 100_000.0, "2026-09-21", "2026-09-18")))
+    assert "*Δ 3d*" in text
+    assert "Δ day" not in text
+
+
+def test_slack_states_the_positions_left_out():
+    text = _pulse(
+        _report(
+            value_delta=ValueDelta(
+                110_000.0, 100_000.0, "2026-09-21", "2026-09-20", excluded_positions=2
+            )
+        )
+    )
+    assert "excl. 2 stale" in text
+
+
+def test_slack_shows_gas_with_its_coverage():
+    text = _pulse(
+        _report(
+            tx_cost_rows=[
+                {"gas_usd": 412.0, "slippage_usd": None},
+                {"gas_usd": None, "slippage_usd": None},
+            ]
+        )
+    )
+    assert "gas  -$412.00" in text
+    assert "(1/2 tx)" in text
+    assert "slippage  —" in text
+
+
+def test_slack_omits_coverage_once_every_transaction_is_priced():
+    text = _pulse(_report(tx_cost_rows=[{"gas_usd": 412.0, "slippage_usd": None}]))
+    assert "gas  -$412.00" in text
+    assert "tx)" not in text
+
+
+def test_slack_says_nothing_about_costs_without_a_transaction_history():
+    assert "gas" not in _pulse(_report())

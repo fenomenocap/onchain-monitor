@@ -40,7 +40,7 @@ def tick_to_sqrt_price(tick: int) -> int:
     """
     Compute sqrtPriceX96 for a given tick.
 
-    NOTE: Uses float math like your existing script. This is fine for display
+    NOTE: Uses float math. This is fine for display
     and for amounts where you can tolerate ~1bp drift, but at extreme ticks
     or for accounting-grade precision, port the Uniswap reference
     getSqrtRatioAtTick (integer-only, exact). See:
@@ -249,6 +249,10 @@ def compute_unclaimed_fees_rpc(
       4. Compute feeGrowthInside (current) using the standard subtraction
       5. delta = feeGrowthInside_now - feeGrowthInside_last
       6. unclaimed_token = liquidity * delta / 2^128 / 10^decimals
+
+    RAISES RuntimeError when a required read fails, as compute_unclaimed_fees_v3
+    does: an unreadable balance returned as a real $0 is indistinguishable
+    downstream from a position that accrued nothing.
     """
     if net_liquidity <= 0:
         return Decimal("0"), Decimal("0"), Decimal("0")
@@ -257,18 +261,18 @@ def compute_unclaimed_fees_rpc(
         rpc, pool_manager, pos_manager, pool_id, tick_lower, tick_upper, token_id
     )
     if not pos:
-        return Decimal("0"), Decimal("0"), Decimal("0")
+        raise RuntimeError(f"getPosition({token_id}) unreadable for pool {pool_id}")
     _, fg_inside0_last, fg_inside1_last = pos
 
     globals_ = rpc_get_fee_growth_globals(rpc, pool_manager, pool_id)
     if not globals_:
-        return Decimal("0"), Decimal("0"), Decimal("0")
+        raise RuntimeError(f"getFeeGrowthGlobals unreadable for pool {pool_id}")
     fg_global0, fg_global1 = globals_
 
     lower = rpc_get_tick_info(rpc, pool_manager, pool_id, tick_lower)
     upper = rpc_get_tick_info(rpc, pool_manager, pool_id, tick_upper)
     if not lower or not upper:
-        return Decimal("0"), Decimal("0"), Decimal("0")
+        raise RuntimeError(f"getPoolTickInfo unreadable for pool {pool_id}")
     _, _, fg_out0_lower, fg_out1_lower = lower
     _, _, fg_out0_upper, fg_out1_upper = upper
 
@@ -382,11 +386,21 @@ def rpc_enumerate_positions_v3(
 
     Calls balanceOf(wallet) → count, then tokenOfOwnerByIndex(wallet, i) for each index.
     Only returns CURRENT positions — exited positions (NFT transferred away) are not included.
+
+    Raises RuntimeError when a call fails or answers short. An empty list means
+    the wallet genuinely holds none, and callers act on that: machinex skips its
+    block cursor forward 150k blocks WITHOUT scanning when this returns empty.
+    RpcClient.eth_call swallows every transport error into None, so conflating
+    the two let one flaky RPC response walk the cursor past an unscanned range
+    permanently — and report the sync as caught up while doing it.
     """
     bal_data = SEL_V3_BALANCE_OF + _abi_address(wallet)
     bal_result = rpc.eth_call(nft_manager, bal_data)
     if not bal_result or len(bal_result) < 32:
-        return []
+        raise RuntimeError(
+            f"balanceOf failed on {nft_manager} for {wallet} — RPC unavailable or "
+            "returned a short answer; cannot tell 'no positions' from 'no reply'"
+        )
     count = _decode_uint256(bal_result, 0)
     if count == 0:
         return []
@@ -395,8 +409,13 @@ def rpc_enumerate_positions_v3(
     for i in range(count):
         idx_data = SEL_V3_TOKEN_OF_OWNER_BY_INDEX + _abi_address(wallet) + _abi_uint256(i)
         idx_result = rpc.eth_call(nft_manager, idx_data)
-        if idx_result and len(idx_result) >= 32:
-            token_ids.append(_decode_uint256(idx_result, 0))
+        if not idx_result or len(idx_result) < 32:
+            raise RuntimeError(
+                f"tokenOfOwnerByIndex({i}) failed on {nft_manager} for {wallet} — "
+                f"balanceOf reported {count} positions; a short list would silently "
+                "drop that position's events from the scan"
+            )
+        token_ids.append(_decode_uint256(idx_result, 0))
     return token_ids
 
 
@@ -607,14 +626,23 @@ def compute_unclaimed_fees_v3(
     instead of V4 PoolManager.
 
     Returns (unclaimed_token0, unclaimed_token1, unclaimed_usd).
+
+    RAISES RuntimeError when a required read fails. A zero return must mean
+    "this position accrued no fees", never "the RPC would not answer": the two
+    are indistinguishable downstream, so an unreadable balance reported as a
+    real $0 silently understates unclaimed fees and every yield derived from
+    them. Only `liquidity <= 0` is a genuine zero — a position with no
+    liquidity really has nothing accruing.
+
     Pass nft_header_words=0 for MachineX/Ramses-lite NFT managers that omit nonce+operator.
     Pass int24_third_arg=True for MachineX factory whose getPool uses int24 (tickSpacing).
     """
     pos = rpc_get_position_v3(rpc, nft_manager, token_id, nft_header_words=nft_header_words)
     if not pos:
-        return Decimal("0"), Decimal("0"), Decimal("0")
+        raise RuntimeError(f"positions({token_id}) unreadable on {nft_manager}")
     token0_addr, token1_addr, fee, tick_lower, tick_upper, liquidity, fg0_last, fg1_last = pos
 
+    # A genuine zero: nothing accrues on a position holding no liquidity.
     if liquidity <= 0:
         return Decimal("0"), Decimal("0"), Decimal("0")
 
@@ -622,17 +650,17 @@ def compute_unclaimed_fees_v3(
         rpc, factory, token0_addr, token1_addr, fee, int24_third_arg=int24_third_arg
     )
     if not pool:
-        return Decimal("0"), Decimal("0"), Decimal("0")
+        raise RuntimeError(f"getPool unreadable for tokenId {token_id} on {factory}")
 
     globals_ = rpc_get_fee_growth_globals_v3(rpc, pool)
     if not globals_:
-        return Decimal("0"), Decimal("0"), Decimal("0")
+        raise RuntimeError(f"feeGrowthGlobal unreadable on pool {pool}")
     fg_global0, fg_global1 = globals_
 
     lower = rpc_get_tick_info_v3(rpc, pool, tick_lower)
     upper = rpc_get_tick_info_v3(rpc, pool, tick_upper)
     if not lower or not upper:
-        return Decimal("0"), Decimal("0"), Decimal("0")
+        raise RuntimeError(f"tick info unreadable on pool {pool} ({tick_lower}/{tick_upper})")
     _, _, fg_out0_lower, fg_out1_lower = lower
     _, _, fg_out0_upper, fg_out1_upper = upper
 

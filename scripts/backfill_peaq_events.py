@@ -14,6 +14,7 @@ Usage: python scripts/backfill_peaq_events.py
 from __future__ import annotations
 
 import logging
+import os
 import time
 
 from dotenv import load_dotenv
@@ -31,7 +32,7 @@ _log = logging.getLogger("backfill_peaq")
 
 
 def main() -> None:
-    storage = Storage("tracker.db")
+    storage = Storage(os.getenv("TRACKER_DB", "tracker.db"))
     runner = TrackerRunner(storage)
     adapter = get_adapter("machinex")
 
@@ -61,8 +62,12 @@ def main() -> None:
             except Exception as e:
                 consecutive_failures += 1
                 if consecutive_failures >= 5:
-                    _log.error("%s: %d consecutive failures — moving on. Last: %s",
-                               addr, consecutive_failures, e)
+                    _log.error(
+                        "%s: %d consecutive failures — moving on. Last: %s",
+                        addr,
+                        consecutive_failures,
+                        e,
+                    )
                     break
                 _log.warning("%s iter %d failed (%s) — retrying in 15s", addr, iteration, e)
                 time.sleep(15)
@@ -71,7 +76,12 @@ def main() -> None:
             new_cursor = adapter._get_scan_cursor(addr, Chain.PEAQ)  # noqa: SLF001
             _log.info(
                 "%s iter %d: cursor %d -> %d, events inserted=%d, %d blocks remaining",
-                addr, iteration, cursor, new_cursor, inserted, latest - new_cursor,
+                addr,
+                iteration,
+                cursor,
+                new_cursor,
+                inserted,
+                latest - new_cursor,
             )
             if new_cursor <= cursor:
                 _log.warning("%s cursor did not advance — stopping to avoid an infinite loop", addr)
