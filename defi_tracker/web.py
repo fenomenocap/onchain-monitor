@@ -976,8 +976,8 @@ def _proposed_ladder(data: ReportData, c: dict) -> str:
                if held else ""))  # fmt: skip
     rows = []
     for i, o in enumerate(bid["options"], 1):
-        qty = float(o["peaq"]) if o.get("peaq") is not None else float(o.get("share", 1)) * loan
         pct = o.get("strike_pct")
+        is_put = o.get("type") == "put"
         k_quote: float | None
         k_now: float | None
         if o.get("strike_usd") is not None:
@@ -990,11 +990,19 @@ def _proposed_ladder(data: ReportData, c: dict) -> str:
                 f" (quoted on {_price(Decimal(str(ref)))})" if ref else ""
             )
         k_show = k_quote if k_quote is not None else k_now
+        if o.get("peaq") is not None:
+            qty = float(o["peaq"])
+        elif o.get("usd") is not None and spot:
+            qty = float(o["usd"]) / ((k_now or spot) if is_put else spot)
+        else:
+            qty = float(o.get("share", 1)) * loan
         t = float(o["months"]) / 12 if o.get("months") is not None else months / 12
-        fv = (qty * bs_call(spot, k_now, s_ann, t)
-              if spot is not None and s_ann and k_now is not None else None)  # fmt: skip
+        fv = None
+        if spot is not None and s_ann and k_now is not None:
+            cv = bs_call(spot, k_now, s_ann, t)
+            fv = qty * (cv - spot + k_now if is_put else cv)
         rows.append(
-            f"<tr><td>P{i}</td><td>{_m(Decimal(str(round(qty))))}</td>"
+            f"<tr><td>{'Put' if is_put else 'Call'} {i}</td><td>{_m(Decimal(str(round(qty))))}</td>"
             f"<td>{_e(_price(Decimal(str(k_show))) if k_show is not None else 'not fixed')}</td>"
             f'<td class="asof">{_e(basis)}</td>'
             f"<td>{f'{k_now / spot:.1f}×' if k_now is not None and spot else '—'}</td>"
@@ -1642,9 +1650,10 @@ def _variants_table(data: ReportData, ctx: dict) -> str:
         c = bid_cost(b, ctx["spot"], sig[0] if sig else None, sig[1] if sig else 0,
                      data.rfq.get("carry_rate_pct"), com["listed_d2_usd"])  # fmt: skip
         # Loan utilisation as the MMs' own sheets put it: ±2% depth (spot and
-        # perp) per dollar of PEAQ lent.
+        # perp) per dollar lent, PEAQ and stables alike.
         d2 = (com["listed_d2_usd"] or 0) + (com["perp_d2_usd"] or 0)
-        used = f"{d2 / c['notional_usd']:.0%}" if d2 and c["notional_usd"] else "—"
+        lent = (c["notional_usd"] or 0) + float(b.get("stables_lent_usd") or 0)
+        used = f"{d2 / lent:.0%}" if d2 and lent else "—"
         term = c["total_usd"] * c["years"] if c["total_usd"] is not None else None
         inc = _delivered_d2(got, b.get("incumbent"))
         tvl = float(b.get("tvl_mid_usd") or 0)

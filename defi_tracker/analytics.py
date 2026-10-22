@@ -2374,28 +2374,34 @@ def bid_cost(
     sig = sigma_daily * math.sqrt(365) if sigma_daily else None
     opts: float | None = 0.0
     band: tuple[float, float] | None = (0.0, 0.0)
-    if bid.get("options") and (loan or any(o.get("peaq") for o in bid["options"])):
+    if bid.get("options") and (loan or any(o.get("peaq") or o.get("usd") for o in bid["options"])):
         if spot is None or sig is None:
             opts = band = None
         else:
             lo_s, hi_s = sigma_band(sig, n_obs)
 
             def one(o: dict, s: float) -> float:
-                """A tranche: `peaq` tokens or `share` of the loan; strike as
-                `strike_usd` or `strike_pct` of the reference (PEAQ now);
-                expiry `months` from now or the tenor."""
-                qty = (
-                    float(o["peaq"])
-                    if o.get("peaq") is not None
-                    else float(o.get("share", 1)) * loan
-                )
+                """A tranche: `peaq` tokens, `usd` of notional, or `share` of
+                the loan; strike as `strike_usd` or `strike_pct` of the
+                reference (PEAQ now); expiry `months` from now or the tenor.
+                `type = "put"`: the MM may hand PEAQ back at the strike in
+                place of the stables lent — `usd` of stables buys usd/strike
+                PEAQ — so peaq is short a put (value = call − spot + strike)."""
                 k = (
                     float(o["strike_usd"])
                     if o.get("strike_usd") is not None
                     else spot * float(o["strike_pct"]) / 100
                 )
+                is_put = o.get("type") == "put"
+                if o.get("peaq") is not None:
+                    qty = float(o["peaq"])
+                elif o.get("usd") is not None:
+                    qty = float(o["usd"]) / (k if is_put else spot)
+                else:
+                    qty = float(o.get("share", 1)) * loan
                 t = float(o["months"]) / 12 if o.get("months") is not None else years
-                return qty * bs_call(spot, k, s, t)
+                c = bs_call(spot, k, s, t)
+                return qty * (c - spot + k if is_put else c)
 
             def value(s: float) -> float:
                 # `replaces`: options the bid swaps out — their value is netted

@@ -270,6 +270,37 @@ def test_a_variant_with_its_own_depth_shows_depth_per_dollar_lent():
     assert "<td>50%<small>$20.0k ±2%</small>" in v and "<td>100%<small>$40.0k ±2%</small>" in v
 
 
+def test_a_put_on_stables_lent_is_priced_as_a_put_the_desk_writes():
+    """A strangle bid: $500 of PEAQ and $500 of stables lent, a call on the
+    PEAQ and a put letting the MM repay the stables in PEAQ at the strike.
+    The put is priced by parity (call − spot + strike) on usd/strike tokens;
+    an at-the-money put is worth as much as the at-the-money call."""
+    from defi_tracker.analytics import bid_cost, bs_call
+
+    call = {"usd": 500, "strike_pct": 100}
+    put = {"type": "put", "usd": 500, "strike_pct": 100}
+    base = {"loan_usd": 500, "stables_lent_usd": 500, "tenor_months": 12}
+    c = bid_cost({**base, "options": [call]}, 1.0, 0.05, 365, None, None)
+    p = bid_cost({**base, "options": [put]}, 1.0, 0.05, 365, None, None)
+    assert abs(c["options_usd"] - p["options_usd"]) < 1e-9
+    otm = bid_cost({**base, "options": [{"type": "put", "usd": 500, "strike_pct": 80}]},
+                   1.0, 0.05, 365, None, None)  # fmt: skip
+    sig = 0.05 * 365**0.5
+    assert abs(otm["options_usd"] - 500 / 0.8 * (bs_call(1.0, 0.8, sig, 1.0) - 1.0 + 0.8)) < 1e-9
+
+
+def test_depth_per_dollar_lent_counts_the_stables_too():
+    rows = [_obs("mm-a", "gate", "2026-10-15", "depth_200", 20_000.0, 50_000.0)]
+    rfq = {"carry_rate_pct": 0.5,
+           "bid": [{"name": "Renewal", "incumbent": "MM-A", "loan_peaq": 1_000_000, "tenor_months": 12,
+                    "options": [{"share": 1, "strike_pct": 150}], "depth": [{"venues": ["gate"], "d2": 20_000}]}],
+           "variant": [{"of": "Renewal", "name": "Strangle", "loan_peaq": 500_000, "stables_lent_usd": 20_000,
+                        "options": [{"share": 1, "strike_pct": 150},
+                                    {"type": "put", "usd": 20_000, "strike_pct": 90}]}]}  # fmt: skip
+    v = _rfq_page(rfq, rows).split("Renewal: other structures", 1)[1]
+    assert "<td>50%<small>$20.0k ±2%</small>" in v  # $20k ÷ ($20k PEAQ + $20k stables)
+
+
 def test_a_decision_card_is_the_call_the_deadline_and_what_to_request_and_check():
     rfq = {"seat": [{"seat": "MM-A", "incumbent": "MM-A", "exit_by": "2099-01-01", "exit_how": "notice",
                      "call": "Renegotiate", "why": "One line.", "request": ["Ask A"], "check": ["Check B"]}]}  # fmt: skip
