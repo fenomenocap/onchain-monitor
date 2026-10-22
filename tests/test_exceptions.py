@@ -72,10 +72,10 @@ def test_clearing_is_not_reviewing(storage: Storage):
     (row,) = storage.list_exceptions()
     assert row["cleared_at"] == 2 and row["reviewed_at"] is None
     assert storage.review_exception(
-        row["id"], by="xavi", disposition="accepted", note="rebalanced", now=3
+        row["id"], by="owner", disposition="accepted", note="rebalanced", now=3
     )
     (row,) = storage.list_exceptions()
-    assert (row["reviewed_by"], row["disposition"]) == ("xavi", "accepted")
+    assert (row["reviewed_by"], row["disposition"]) == ("owner", "accepted")
 
 
 def test_exceptions_in_a_window_include_those_that_straddle_it(storage: Storage):
